@@ -1,0 +1,15 @@
+# The nightly backup (issue #3), started by bs3d-api-backup.timer. A consistent copy of the live database through
+# SQLite's own backup API (BS3D.Api admin backup), thirty days kept, and one copy off the box when backup.env says where.
+[Unit]
+Description=BS3D score service backup
+
+[Service]
+Type=oneshot
+User=bs3d-api
+Group=bs3d-api
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=Scores__Database=/var/lib/bs3d-api/scores.db
+Environment=Scores__CeilingsDirectory=/var/lib/bs3d-api/ceilings
+EnvironmentFile=/etc/bs3d-api/env
+EnvironmentFile=-/etc/bs3d-api/backup.env
+ExecStart=/opt/bs3d-api/current/deploy/backup.sh
