@@ -480,3 +480,9 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# The service's state and the tables it loads, on a developer's machine
+*.db
+*.db-shm
+*.db-wal
+/src/BS3D.Api/ceilings/

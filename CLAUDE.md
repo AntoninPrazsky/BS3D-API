@@ -12,6 +12,21 @@ It is a separate repository from the game because it targets a different runtime
 
 The work is tracked in this repository's issues: **#1** the service (minimal API over SQLite, boards as views over an append-only log), **#2** security (Cloudflare Tunnel, what the service must enforce because the client is open source), **#3** the Pi as host (systemd, backups, a release the Pi pulls).
 
+## Architecture (issue #1)
+
+One ASP.NET Core minimal API, one SQLite file, no ORM.
+
+- `Contracts.cs` — contract v1 as the wire carries it, and every refusal's reason code (`Reasons`). The game's copy is BS3D's `Game/Online/ScoreSubmission.cs`.
+- `Endpoints.cs` — `POST /v1/scores`, `GET /v1/boards/{file}`, `PUT` and `DELETE /v1/players/{id}`, with every check issue #2 says the service must make: a known board (`Ceilings`), a score not over its ceiling, 1–4 stars, shots between the level's fewest and its budget, a duration no faster than `MinSecondsPerShot` per shot, a nickname by the rule, a well-formed game version, per-address and per-player rate limits (429 with `Retry-After`), and a token per player — trusted on first use, stored as its SHA-256, compared in constant time. A repeated `submissionId` is answered with its stored first answer and counts once. Every refusal is one log line with its reason; nothing about an accepted submission is logged.
+- `ScoreStore.cs` — the schema (applied at every start) and every query. **Boards are views over an append-only log**: a board is the best clear per visible player on `(level file, level hash, rules version)`, over one UTC month or all time, ranked by score and then by arrival (`rowid`), so ties go to the earlier submission. Only `players.name`, `players.hidden` and a submission's stored answer are ever updated. Transactions are plain `BEGIN IMMEDIATE`/`COMMIT` SQL, because Microsoft.Data.Sqlite refuses commands without their `Transaction` set while a `SqliteTransaction` object is open.
+- `Ceilings.cs` — every `BS3D-<version>-ceilings.json` in `Scores:CeilingsDirectory` (the union: old game versions stay in the wild). `Scores:RequireKnownBoard` is false in Development only, so a local run takes the test levels the game is pointed at with `levelfile=`.
+- `Nicknames.cs` — 3–16 characters after NFC, trimming and closing runs of spaces; letters, digits, single spaces, `_`, `-`; not a denied name. The game is stricter (only letters its fonts draw).
+- `Guards.cs` — tokens, the salted address hash (`CF-Connecting-IP` via the forwarded-headers middleware, trusted from loopback only), the rate windows.
+- `AdminCli.cs` — `BS3D.Api admin hide-player|show-player|rename|export`, run on the box; there is no admin endpoint.
+- **Configuration** is the `Scores` section (`ScoresOptions`), overridden by environment variables (`Scores__AddressSalt`, …). Outside Development the service **refuses to start without `Scores:AddressSalt`** — an unsalted hash of an address is a register of addresses.
+
+**Tests** (`tests/BS3D.Api.Tests`, xunit over `WebApplicationFactory`, a fresh database and a `FakeTimeProvider` per test) cover the ranking cases first — a month board that ignores last month's better score, a tie to the earlier submission, a hidden player gone from every count, a retried id counted once — then every refusal and the player endpoints. The ranking tests were seen to fail: flipping the tie order and dropping the month filter each failed exactly the test written for it.
+
 ## Build, test, run
 
 ```powershell
