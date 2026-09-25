@@ -1,0 +1,31 @@
+# The score service (issue #3). Installed by deploy/install.sh to /etc/systemd/system.
+# It listens on loopback only: the internet reaches it through cloudflared (issue #2), the LAN not at all.
+[Unit]
+Description=BS3D score service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bs3d-api
+Group=bs3d-api
+WorkingDirectory=/var/lib/bs3d-api
+ExecStart=/opt/bs3d-api/current/BS3D.Api
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://127.0.0.1:5000
+Environment=Scores__Database=/var/lib/bs3d-api/scores.db
+Environment=Scores__CeilingsDirectory=/var/lib/bs3d-api/ceilings
+# The salt and anything else secret: root-only, read by systemd before it drops to the service user. Never in this file.
+EnvironmentFile=/etc/bs3d-api/env
+Restart=always
+RestartSec=5
+
+# The service writes its database and nothing else
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/bs3d-api
+
+[Install]
+WantedBy=multi-user.target

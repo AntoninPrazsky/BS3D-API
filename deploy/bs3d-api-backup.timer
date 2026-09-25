@@ -1,0 +1,11 @@
+[Unit]
+Description=BS3D score service backup, nightly
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=10min
+# A Pi that was off at 03:30 backs up when it comes back
+Persistent=true
+
+[Install]
+WantedBy=timers.target

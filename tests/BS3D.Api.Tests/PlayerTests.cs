@@ -102,4 +102,26 @@ public sealed class PlayerTests
         Assert.Contains("\"name\":\"Renamed\"", export.ToString());
         Assert.Contains("\"hidden\":1", export.ToString());
     }
+
+    [Fact]
+    public async Task A_backup_taken_while_the_service_runs_serves_the_same_rows()
+    {
+        using Api api = new();
+        var player = Api.NewPlayer();
+        await api.Accepted(player, Api.Clear(player.Id, 100));
+        await api.Accepted(player, Api.Clear(player.Id, 250));
+
+        string backup = Path.Combine(Path.GetTempPath(), "bs3d-api-tests", Guid.NewGuid().ToString("N"), "backup.db");
+        StringWriter output = new();
+        Assert.Equal(0, AdminCli.Run(["backup", backup], api.Store, new ScoresOptions(), output));
+
+        ScoreStore restored = new(backup);
+        StringWriter count = new();
+        Assert.Equal(0, AdminCli.Run(["count"], restored, new ScoresOptions(), count));
+        Assert.Equal("players 1 submissions 2", count.ToString().Trim());
+
+        using var c = restored.Open();
+        Assert.Equal(250, restored.Page(c, new BoardKey(Api.File, Api.Hash, Api.Rules), null, 10, 0).Single().Score);
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+    }
 }
