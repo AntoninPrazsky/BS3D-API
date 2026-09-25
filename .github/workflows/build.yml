@@ -1,0 +1,27 @@
+name: Build
+
+# Every push, like BS3D's own build.yml: this repository has no pull requests either, so a push is how a merge
+# into main lands. Linux, because the service runs on linux-arm64 (a Raspberry Pi 5, issue #3) and nothing in it
+# is Windows-only. Free: the repository is public.
+on: [push]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build BS3D.Api.slnx
+
+      - name: Test
+        run: dotnet test BS3D.Api.slnx --no-build
+
+      # The target the Pi runs, published on every push so a change that breaks it is caught here and not on the box
+      - name: Publish for linux-arm64
+        run: dotnet publish src/BS3D.Api/BS3D.Api.csproj -c Release -r linux-arm64 --self-contained true -o publish

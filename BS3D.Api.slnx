@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/BS3D.Api/BS3D.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/BS3D.Api.Tests/BS3D.Api.Tests.csproj" />
+  </Folder>
+</Solution>
