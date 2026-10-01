@@ -207,7 +207,8 @@ public sealed class ProcessTests
 
         Assert.Equal(1, process.ExitCode);
         Assert.Contains("missing?]0;owned?.db", text);
-        Assert.DoesNotContain(text, c => char.IsControl(c) && c != '\n');
+        // On Windows the console's line break is "\r\n"
+        Assert.DoesNotContain(text.Replace("\r\n", "\n"), c => char.IsControl(c) && c != '\n');
     }
 
     private static async Task<bool> Connects(IPAddress address, int port)
