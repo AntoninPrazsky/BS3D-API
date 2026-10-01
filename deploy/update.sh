@@ -74,3 +74,12 @@ echo "bs3d-api $version is up: $(curl -fsS http://127.0.0.1:5000/v1/health)"
 echo "rows before: $before"
 echo "rows after:  $after"
 [[ "$before" == "$after" || "$before" == "no database yet" ]] || { echo "ROW COUNT CHANGED ACROSS THE UPDATE" >&2; exit 2; }
+
+# The admin page's launcher is the owner's to install (install-admin.sh, #5), never an update's: this only says so
+for pair in "bs3d-admin-run.sh /usr/local/libexec/bs3d-admin-run" "bs3d-admin.sh /usr/local/bin/bs3d-admin"; do
+    read -r shipped installed <<< "$pair"
+    if [[ -e "$installed" ]] && ! cmp -s "$ROOT/$version/deploy/$shipped" "$installed"; then
+        echo "The admin launcher in $version differs from the installed one: sudo $ROOT/current/deploy/install-admin.sh"
+        break
+    fi
+done
