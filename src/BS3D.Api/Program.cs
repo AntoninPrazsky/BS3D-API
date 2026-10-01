@@ -21,6 +21,10 @@ builder.Services.AddSingleton(sp => new ScoreStore(sp.GetRequiredService<IOption
 builder.Services.AddSingleton(sp => Ceilings.Load(
     sp.GetRequiredService<IOptions<ScoresOptions>>().Value.CeilingsDirectory, sp.GetRequiredService<ILogger<Ceilings>>()));
 builder.Services.AddSingleton<RateLimits>();
+// Refusals gathered in memory and written in batches for the admin page (issue #5), never on the request path
+builder.Services.AddSingleton<Refusals>();
+builder.Services.AddSingleton<RefusalFlusher>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<RefusalFlusher>());
 builder.Services.AddSingleton(sp => new AddressHasher(sp.GetRequiredService<IOptions<ScoresOptions>>().Value.AddressSalt));
 builder.Services.AddOpenApi();
 

@@ -47,4 +47,22 @@ public sealed class ScoresOptions
 
     /// <summary>Nicknames refused outright, compared case-insensitively against the normalized name.</summary>
     public List<string> DeniedNames { get; set; } = new() { "admin", "administrator", "moderator", "system", "bs3d" };
+
+    /// <summary>
+    /// Seconds between two writes of the refusals gathered in memory (issue #5). A flood of bad requests costs one
+    /// write per flush, not one per request.
+    /// </summary>
+    public int RefusalFlushSeconds { get; set; } = 5;
+
+    /// <summary>
+    /// Refusals kept in memory for <c>refusal_log</c> between two flushes. Past it they are counted, not kept, and the
+    /// flush writes one "dropped" row for them; <c>refusal_days</c> counts every one regardless.
+    /// </summary>
+    public int RefusalQueueCapacity { get; set; } = 500;
+
+    /// <summary>Days of refusals <c>refusal_log</c> keeps; each flush deletes older rows.</summary>
+    public int RefusalLogDays { get; set; } = 7;
+
+    /// <summary>Rows <c>refusal_log</c> keeps at most; each flush deletes the oldest beyond it.</summary>
+    public int RefusalLogMaxRows { get; set; } = 10_000;
 }

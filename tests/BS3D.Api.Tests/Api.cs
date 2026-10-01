@@ -37,6 +37,9 @@ public sealed class Api : WebApplicationFactory<Program>
     /// <summary>Every line the service logs.</summary>
     public LogCapture Log { get; } = new();
 
+    /// <summary>A web root to give the service, as a published folder with a <c>wwwroot</c> would give it one.</summary>
+    public string? WebRoot { get; init; }
+
     public Api(Dictionary<string, string?>? settings = null)
     {
         Directory.CreateDirectory(Path.Combine(_folder, "ceilings"));
@@ -61,6 +64,7 @@ public sealed class Api : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Testing");
         foreach (var (key, value) in _settings) builder.UseSetting(key, value);
+        if (WebRoot != null) builder.UseSetting(WebHostDefaults.WebRootKey, WebRoot);
         builder.ConfigureLogging(logging => logging.AddProvider(Log));
         builder.ConfigureServices(services =>
         {

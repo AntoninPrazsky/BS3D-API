@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
 
 namespace BS3D.Api;
@@ -20,7 +21,7 @@ namespace BS3D.Api;
 /// </summary>
 public sealed class ScoreStore(string path)
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
     private readonly string _connectionString = new SqliteConnectionStringBuilder
     {
@@ -67,6 +68,19 @@ public sealed class ScoreStore(string path)
                 answer TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS ix_submissions_board ON submissions(level_file, level_hash, rules_version, month);
             CREATE INDEX IF NOT EXISTS ix_submissions_player ON submissions(player_id);
+            CREATE TABLE IF NOT EXISTS refusal_days (
+                day TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                count INTEGER NOT NULL,
+                PRIMARY KEY (day, reason));
+            CREATE TABLE IF NOT EXISTS refusal_log (
+                id INTEGER PRIMARY KEY,
+                at TEXT NOT NULL,
+                status INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                method TEXT NOT NULL,
+                path TEXT NOT NULL,
+                detail TEXT NOT NULL);
             """);
         Execute(c, $"PRAGMA user_version = {SchemaVersion};");
     }
@@ -216,6 +230,50 @@ public sealed class ScoreStore(string path)
 
     /// <summary>A month as the boards name it: the UTC calendar month, never a client's clock.</summary>
     public static string MonthOf(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM");
+
+    /// <summary>A day as <c>refusal_days</c> counts it: the UTC calendar day.</summary>
+    public static string DayOf(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM-dd");
+
+    /// <summary>
+    /// One flush of <see cref="Refusals"/> (issue #5), in one transaction: the day counts added to, the entries
+    /// appended, one "dropped" row for what did not fit in memory, then <c>refusal_log</c> pruned to its age and size.
+    /// These two tables are outside the append-only log: counts are upserted and old rows deleted.
+    /// </summary>
+    public void WriteRefusals(SqliteConnection c, Refusals.Batch batch, DateTimeOffset now, TimeSpan keep, int maxRows)
+    {
+        Begin(c);
+        try
+        {
+            foreach (((string day, string reason), int count) in batch.Counts)
+                Command(c, """
+                    INSERT INTO refusal_days (day, reason, count) VALUES ($d, $r, $n)
+                    ON CONFLICT (day, reason) DO UPDATE SET count = count + excluded.count
+                    """, ("$d", day), ("$r", reason), ("$n", count)).ExecuteNonQuery();
+
+            foreach (Refusals.Entry e in batch.Entries)
+                InsertRefusal(c, e);
+            if (batch.Dropped > 0)
+                InsertRefusal(c, new Refusals.Entry(now, 0, "dropped", "", "",
+                    $"{batch.Dropped} refusal(s) counted but not kept: more than the queue holds between two writes"));
+
+            Command(c, "DELETE FROM refusal_log WHERE at < $cutoff", ("$cutoff", Stamp(now - keep))).ExecuteNonQuery();
+            Command(c, "DELETE FROM refusal_log WHERE id <= (SELECT id FROM refusal_log ORDER BY id DESC LIMIT 1 OFFSET $max)",
+                ("$max", maxRows)).ExecuteNonQuery();
+            Commit(c);
+        }
+        catch
+        {
+            Rollback(c);
+            throw;
+        }
+    }
+
+    private static void InsertRefusal(SqliteConnection c, Refusals.Entry e) =>
+        Command(c, "INSERT INTO refusal_log (at, status, reason, method, path, detail) VALUES ($at, $s, $r, $m, $p, $d)",
+            ("$at", Stamp(e.At)), ("$s", e.Status), ("$r", e.Reason), ("$m", e.Method), ("$p", e.Path), ("$d", e.Detail)).ExecuteNonQuery();
+
+    /// <summary>UTC, fixed width, so text order is time order.</summary>
+    private static string Stamp(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ", CultureInfo.InvariantCulture);
 
     private static SqliteCommand BoardCommand(SqliteConnection c, BoardKey board, string? month, string sql) =>
         Command(c, sql, ("$f", board.File), ("$h", board.Hash), ("$r", board.Rules), ("$month", (object?)month ?? DBNull.Value));
