@@ -7,8 +7,9 @@
 #
 #   sudo /opt/bs3d-api/current/deploy/tunnel-token.sh
 #
-# First, in the Cloudflare dashboard: Networking > Tunnels > the tunnel > Overview > Refresh token (a new tunnel has a
-# fresh one already), then Add a replica, and copy the token: the long string starting with eyJ. The whole
+# First, in the Cloudflare dashboard: Networking > Tunnels > the tunnel > Overview > Rotate token, in the right-hand
+# column under the heading "Refresh token" (a new tunnel has a fresh one already), then Add a replica, and copy the
+# token: the long string starting with eyJ. Never run the install command the dashboard shows. The whole
 # "sudo cloudflared service install eyJ..." line is accepted too. cloudflared itself comes from Cloudflare's apt
 # repository (README, "The tunnel").
 #
@@ -50,8 +51,8 @@ sys.exit(0 if isinstance(token, dict) and {"a", "t", "s"} <= token.keys() else 1
     || { echo "That is not a whole tunnel token (pasted twice, or cut short?). Nothing changed." >&2; exit 1; }
 
 if [[ -f "$TOKEN_FILE" && "$(tr -d '[:space:]' < "$TOKEN_FILE")" == "$token" ]]; then
-    echo "This is the token already in place, so Refresh token was not pressed. Press it in the dashboard," >&2
-    echo "copy the new token and run this again. Nothing changed." >&2
+    echo "This is the token already in place, so Rotate token (under \"Refresh token\" on the tunnel's Overview) was" >&2
+    echo "not pressed. Press it, copy the new token and run this again. Nothing changed." >&2
     exit 1
 fi
 
