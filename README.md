@@ -95,7 +95,7 @@ admin rename <player id> <nickname>
 admin export > export.jsonl
 ```
 
-**The admin page** (#5, read-only): an overview (players, clears and refusals per day, the database, the newest backup), a live view of the newest clears and refusals, every board ranked as the game sees it (its hidden players apart), and every player with their clears, how many addresses they came from and whom they share one with (never the addresses themselves). It is a separate process on the Pi's loopback, never behind the tunnel, and lives as long as the terminal that started it. Once, install its launcher: `bs3d-admin`, the runner it starts as `bs3d-api`, and the sudoers rule that lets the account running this start it without a password (`--remove` takes all three away):
+**The admin page** (#5, read-only): an overview (players, clears and refusals per day, the database, the newest backup), a live view of the newest clears and refusals, every board ranked as the game sees it (its hidden players apart), and every player with their clears, how many addresses they came from and whom they share one with (never the addresses themselves). It works on a phone's width too, light or dark after the system's setting. It is a separate process on the Pi's loopback, never behind the tunnel, and lives as long as the terminal that started it. Once, install its launcher: `bs3d-admin`, the runner it starts as `bs3d-api`, and the sudoers rule that lets the account running this start it without a password (`--remove` takes all three away):
 
 ```bash
 sudo /opt/bs3d-api/current/deploy/install-admin.sh
