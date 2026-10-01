@@ -1,0 +1,41 @@
+# The Cloudflare Tunnel connector (issues #2, #4), installed by deploy/tunnel-token.sh. The unit
+# `cloudflared service install <token>` writes, with two changes: the token never passes sudo's command line (the
+# script reads it at a prompt), and the connector runs as a throwaway user instead of root. systemd reads
+# /etc/cloudflared/token (root, 0600) as root and hands the process a copy in its credentials directory (%d).
+[Unit]
+Description=Cloudflare Tunnel for the BS3D score service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+TimeoutStartSec=15
+DynamicUser=yes
+LoadCredential=token:/etc/cloudflared/token
+# Updates come with apt (Cloudflare's repository), never from cloudflared itself. apt does not restart a running
+# connector: after an upgrade, `sudo systemctl restart cloudflared` (README, Updating)
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel run --token-file %d/token
+Restart=on-failure
+RestartSec=5s
+
+# It needs outbound network and nothing else
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -33,8 +33,9 @@ mkdir -p "$ROOT/$version"
 # Everything here is root's, because root runs it: the binary, this script's successor and update-ceilings.sh. tar run
 # as root keeps an archive's owners, and v0.1.0 and v0.1.1 carry the GitHub runner's uid and gid 1001 (issue #3).
 tar --no-same-owner -xzf "$work/$name.tar.gz" -C "$ROOT/$version"
-foreign=$(find "$ROOT/$version" \( ! -user root -o ! -group root \) -print -quit)
-[[ -z "$foreign" ]] || { echo "refusing $version: $foreign is not owned by root:root" >&2; exit 1; }
+# Root's tar also keeps an archive's modes, and a file anyone can write is as good as anyone's (issue #4)
+foreign=$(find "$ROOT/$version" \( ! -user root -o ! -group root -o \( ! -type l -perm /022 \) \) -print -quit)
+[[ -z "$foreign" ]] || { echo "refusing $version: $foreign is not root:root, or is writable by group or others" >&2; exit 1; }
 chmod +x "$ROOT/$version/BS3D.Api" "$ROOT/$version"/deploy/*.sh
 
 count() {
