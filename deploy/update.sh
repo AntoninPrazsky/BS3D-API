@@ -8,6 +8,10 @@
 #   sudo /opt/bs3d-api/current/deploy/update.sh latest      the newest
 set -euo pipefail
 
+# The row counts run the service's binary as bs3d-api, the one before the update included. v0.1.0 took the working
+# directory as its content root and failed in the caller's home, which bs3d-api cannot read; / it can.
+cd /
+
 REPO=${API_REPO:-AntoninPrazsky/BS3D-API}
 ROOT=/opt/bs3d-api
 version=${1:?usage: update.sh <vX.Y.Z | latest>}
