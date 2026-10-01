@@ -22,11 +22,13 @@ jobs:
       - name: Test
         run: dotnet test BS3D.Api.slnx --no-build
 
-      # What root runs on the Pi (issue #4): every script through shellcheck, the tunnel-token script against stand-ins
+      # What root runs on the Pi (issues #4, #5): every script through shellcheck, the tunnel-token script and the admin
+      # page's launcher against stand-ins
       - name: Deploy scripts
         run: |
           shellcheck deploy/*.sh tests/deploy/*.sh
           sudo tests/deploy/tunnel-token.test.sh
+          sudo tests/deploy/install-admin.test.sh
 
       # The target the Pi runs, published on every push so a change that breaks it is caught here and not on the box
       - name: Publish for linux-arm64

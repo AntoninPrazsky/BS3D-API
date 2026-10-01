@@ -95,13 +95,20 @@ admin rename <player id> <nickname>
 admin export > export.jsonl
 ```
 
-**The admin page** (#5, read-only): an overview (players, clears and refusals per day, the database, the newest backup), a live view of the newest clears and refusals, every board ranked as the game sees it (its hidden players apart), and every player with their clears, how many addresses they came from and whom they share one with (never the addresses themselves). It is a separate process on the Pi's loopback, never behind the tunnel, and lives as long as the terminal that started it:
+**The admin page** (#5, read-only): an overview (players, clears and refusals per day, the database, the newest backup), a live view of the newest clears and refusals, every board ranked as the game sees it (its hidden players apart), and every player with their clears, how many addresses they came from and whom they share one with (never the addresses themselves). It is a separate process on the Pi's loopback, never behind the tunnel, and lives as long as the terminal that started it. Once, install its launcher: `bs3d-admin`, the runner it starts as `bs3d-api`, and the sudoers rule that lets the account running this start it without a password (`--remove` takes all three away):
 
 ```bash
-cd / && sudo -u bs3d-api env Scores__Database=/var/lib/bs3d-api/scores.db Scores__CeilingsDirectory=/var/lib/bs3d-api/ceilings /opt/bs3d-api/current/BS3D.Api admin web
+sudo /opt/bs3d-api/current/deploy/install-admin.sh
 ```
 
-It prints a link that works once, for 5 minutes: open it in the Pi's own browser, or from the desktop through `ssh -L 5001:127.0.0.1:5001 rdt@<the Pi>`. It stops after 30 minutes without use, when the terminal closes, or with Ctrl+C. A shorter launcher comes with the next part of #5.
+Then, in a terminal on the Pi, or from the desktop in one line:
+
+```bash
+bs3d-admin                       # or: bs3d-admin --port 5002
+ssh -t -o ExitOnForwardFailure=yes -L 127.0.0.1:5001:127.0.0.1:5001 rdt@<the Pi> bs3d-admin
+```
+
+It prints a link that works once, for 5 minutes: open it in the Pi's own browser, or in the desktop's while that ssh runs. It stops after 30 minutes without use, when the terminal closes, or with Ctrl+C. No password is the choice made in #5: any process running as `rdt` can start the page and read every player through it, and in return starting it never authenticates sudo, so it never leaves a timestamp that makes anything root. The runner passes on nothing but `--port N`, into an environment of its own. `update.sh` says when a release carries a different launcher, and never installs one itself.
 
 The service's log: `journalctl -u bs3d-api -f` (no sudo needed for a member of `adm`). It holds the start, the ceiling tables loaded and one entry per refusal, never an accepted submission or a client's address. An entry is two journal lines, `info: BS3D.Api.ScoreStore[0]` and then `Refused <method> <path>: <status> <reason> (<detail>)`, so `journalctl -u bs3d-api | grep Refused` lists the refusals. Since v0.1.4 the service also writes them to its database, for the admin page (#5): every refusal counted per day and reason in `refusal_days`, the last 7 days of them in `refusal_log`. On Raspberry Pi OS the journal lives in memory and is gone after a reboot.
 
@@ -117,8 +124,8 @@ What this Pi has beyond a fresh Raspberry Pi OS, each with its check:
   Defaults:rdt timestamp_type=tty
   rdt ALL=(root) NOPASSWD: /opt/bs3d-api/current/deploy/update.sh, /opt/bs3d-api/current/deploy/update-ceilings.sh, /usr/local/sbin/bs3d-db-snapshot
   ```
-  So a password counts only in the terminal it was typed in, and only these root-owned scripts, which `rdt` cannot change, run without one. `bs3d-db-snapshot` is this Pi's own: a consistent copy of the database into the caller's `~/bs3d-snapshots` for a SQLite browser. Check: after `sudo true` in one terminal, `sudo -n true` in another says a password is required, and `sudo -n -l` lists exactly those three. Without Yama (this kernel has none), a compromised account can still capture the password from its own shells; this closes the free path, not every path.
+  So a password counts only in the terminal it was typed in, and only these root-owned scripts, which `rdt` cannot change, run without one. `bs3d-db-snapshot` is this Pi's own: a consistent copy of the database into the caller's `~/bs3d-snapshots` for a SQLite browser. Check: after `sudo true` in one terminal, `sudo -n true` in another says a password is required, and `sudo -n -l` lists exactly those three, and with the admin page's launcher installed, `(bs3d-api) NOPASSWD: /usr/local/libexec/bs3d-admin-run`. Without Yama (this kernel has none), a compromised account can still capture the password from its own shells; this closes the free path, not every path.
 
 ## Developing
 
-See `CLAUDE.md`. `dotnet test BS3D.Api.slnx`, and for the deploy scripts `shellcheck deploy/*.sh tests/deploy/*.sh` and `sudo tests/deploy/tunnel-token.test.sh` (Linux); a local run the game can submit to is `dotnet run --project src/BS3D.Api --urls http://localhost:5000` with `"server": "http://localhost:5000"` in the game's `Settings.json`.
+See `CLAUDE.md`. `dotnet test BS3D.Api.slnx`, and for the deploy scripts `shellcheck deploy/*.sh tests/deploy/*.sh`, `sudo tests/deploy/tunnel-token.test.sh` and `sudo tests/deploy/install-admin.test.sh` (Linux; the second also runs as `unshare -r`, without sudo); a local run the game can submit to is `dotnet run --project src/BS3D.Api --urls http://localhost:5000` with `"server": "http://localhost:5000"` in the game's `Settings.json`.
