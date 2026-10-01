@@ -10,7 +10,7 @@ It is a separate repository from the game because it targets a different runtime
 
 **The contract is the game's**: contract v1 is written in BS3D#542, and the game's client (BS3D#546, `Game/Online/` in that repository) and its settings (BS3D#548) are built and verified against it. Change the contract there first, then here. What both sides key a board by — the level's file, its `LevelIdentity` hash and `ScoreKeeper.RulesVersion` — is defined in the game's library (BS3D#549); the per-level ceiling table the service whitelists submissions against is written by the game's `Tools/ScoreSim --ceilings` and attached to every game release as `BS3D-<version>-ceilings.json`.
 
-The work is tracked in this repository's issues: **#1** the service (minimal API over SQLite, boards as views over an append-only log), **#2** security (Cloudflare Tunnel, what the service must enforce because the client is open source), **#3** the Pi as host (systemd, backups, a release the Pi pulls).
+The work is tracked in this repository's issues: **#1** the service (minimal API over SQLite, boards as views over an append-only log), **#2** security (Cloudflare Tunnel, what the service must enforce because the client is open source), **#3** the Pi as host (systemd, backups, a release the Pi pulls), **#4** hardening the Pi (the tunnel token kept off sudo's log, `deploy/cloudflared.service`, SSH, IPv6, sudo), **#5** the admin page (designed, not built).
 
 ## Architecture (issue #1)
 
@@ -25,7 +25,7 @@ One ASP.NET Core minimal API, one SQLite file, no ORM.
 - `AdminCli.cs` — `BS3D.Api admin hide-player|show-player|rename|export`, run on the box; there is no admin endpoint.
 - **Configuration** is the `Scores` section (`ScoresOptions`), overridden by environment variables (`Scores__AddressSalt`, …). Outside Development the service **refuses to start without `Scores:AddressSalt`** — an unsalted hash of an address is a register of addresses. The content root is the binary's own folder, not the working directory (`Program.cs`): the Pi starts the service in `/var/lib/bs3d-api`, and without its `appsettings.json` the defaults log every request, player ids in the paths included.
 
-**Tests** (`tests/BS3D.Api.Tests`, xunit over `WebApplicationFactory`, a fresh database and a `FakeTimeProvider` per test) cover the ranking cases first — a month board that ignores last month's better score, a tie to the earlier submission, a hidden player gone from every count, a retried id counted once — then every refusal and the player endpoints. The ranking tests were seen to fail: flipping the tie order and dropping the month filter each failed exactly the test written for it. `ProcessTests` starts the built service as its own process, in Production, from a foreign working directory — the factory sets the content root itself and cannot show what the service does on its own; it was seen to fail on both of its assertions before the content root was fixed.
+**Tests** (`tests/BS3D.Api.Tests`, xunit over `WebApplicationFactory`, a fresh database and a `FakeTimeProvider` per test) cover the ranking cases first — a month board that ignores last month's better score, a tie to the earlier submission, a hidden player gone from every count, a retried id counted once — then every refusal and the player endpoints. The ranking tests were seen to fail: flipping the tie order and dropping the month filter each failed exactly the test written for it. `ProcessTests` starts the built service as its own process, in Production, from a foreign working directory — the factory sets the content root itself and cannot show what the service does on its own; it was seen to fail on both of its assertions before the content root was fixed. `tests/deploy/tunnel-token.test.sh` tests what root runs on the Pi: `deploy/tunnel-token.sh` against a scratch folder, with stand-ins for `systemctl`, `journalctl` and `cloudflared` on `PATH`. It needs root, because the script refuses anyone else, and writes only to a temporary folder.
 
 ## Build, test, run
 
@@ -40,7 +40,14 @@ dotnet run --project src/BS3D.Api --urls http://localhost:5000
 dotnet publish src/BS3D.Api/BS3D.Api.csproj -c Release -r linux-arm64 --self-contained true -o publish
 ```
 
-`.github/workflows/build.yml` builds, tests and publishes for `linux-arm64` on every push, on `ubuntu-latest` — free, because the repository is public.
+The deploy scripts, on Linux only (the Pi, WSL or CI):
+
+```bash
+shellcheck deploy/*.sh tests/deploy/*.sh
+sudo tests/deploy/tunnel-token.test.sh
+```
+
+`.github/workflows/build.yml` builds, tests (both suites, and shellcheck over the deploy scripts) and publishes for `linux-arm64` on every push, on `ubuntu-latest` — free, because the repository is public.
 
 ## Conventions
 
