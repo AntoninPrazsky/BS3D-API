@@ -95,7 +95,7 @@ admin rename <player id> <nickname>
 admin export > export.jsonl
 ```
 
-The service's log: `journalctl -u bs3d-api -f` (no sudo needed for a member of `adm`). It holds the start, the ceiling tables loaded and one entry per refusal, never an accepted submission or a client's address. An entry is two journal lines, `info: BS3D.Api.ScoreStore[0]` and then `Refused <method> <path>: <status> <reason> (<detail>)`, so `journalctl -u bs3d-api | grep Refused` lists the refusals. On Raspberry Pi OS the journal lives in memory and is gone after a reboot.
+The service's log: `journalctl -u bs3d-api -f` (no sudo needed for a member of `adm`). It holds the start, the ceiling tables loaded and one entry per refusal, never an accepted submission or a client's address. An entry is two journal lines, `info: BS3D.Api.ScoreStore[0]` and then `Refused <method> <path>: <status> <reason> (<detail>)`, so `journalctl -u bs3d-api | grep Refused` lists the refusals. Since v0.1.4 the service also writes them to its database, for the admin page (#5): every refusal counted per day and reason in `refusal_days`, the last 7 days of them in `refusal_log`. On Raspberry Pi OS the journal lives in memory and is gone after a reboot.
 
 ### Hardening the Pi (issue #4)
 

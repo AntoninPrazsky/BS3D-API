@@ -227,6 +227,8 @@ public static partial class Endpoints
     private static IResult Refuse(ILogger log, HttpContext http, int status, string reason, string detail)
     {
         log.LogInformation("Refused {Method} {Path}: {Status} {Reason} ({Detail})", http.Request.Method, http.Request.Path, status, reason, detail);
+        http.RequestServices.GetRequiredService<Refusals>().Record(http.RequestServices.GetRequiredService<TimeProvider>().GetUtcNow(),
+            status, reason, http.Request.Method, http.Request.Path.Value ?? "", detail);
         return Results.Json(new Refusal(reason), Json, statusCode: status);
     }
 }
