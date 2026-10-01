@@ -301,7 +301,8 @@ public sealed class AdminWebTests
         writer.Write("2J\rc\td\u007f".ToCharArray(), 0, 7);
         writer.WriteLine("e\u001b[31m");
         writer.Write("f\n");
+        writer.Write("g\r\nh\r");   // a Windows line break kept, a carriage return on its own not
 
-        Assert.Equal("a?]0;owned?b?2J?c?d?e?[31m\nf\n", terminal.ToString());
+        Assert.Equal("a?]0;owned?b?2J?c?d?e?[31m\nf\ng\r\nh?", terminal.ToString());
     }
 }
