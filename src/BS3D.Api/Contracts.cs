@@ -41,6 +41,19 @@ public sealed record BoardEntry(int Rank, string Name, int Score, int Stars, Dat
 
 public sealed record BoardMe(int Rank, int Score, int Stars);
 
+/// <summary>
+/// The answer of <c>GET /v1/boards</c> (#7, BS3D#685): every board with at least one visible clear, each with its #1 and
+/// the asking player's own place, for the game's High Scores screen - one request where the per-board GET would take one
+/// per level. Additive to contract v1; nothing above it changed.
+/// </summary>
+public sealed record BoardsSummary(string Period, string? Month, IReadOnlyList<BoardSummary> Boards);
+
+/// <summary>One board in <see cref="BoardsSummary"/>. <see cref="Me"/> is null without a player or off the board.</summary>
+public sealed record BoardSummary(string File, string Hash, int Rules, int Total, BoardTop Top, BoardMe? Me);
+
+/// <summary>A board's #1.</summary>
+public sealed record BoardTop(string Name, int Score, int Stars);
+
 /// <summary>The answer of <c>GET /v1/health</c>.</summary>
 public sealed record HealthAnswer(string Status, int Contract, int Schema, int Boards);
 

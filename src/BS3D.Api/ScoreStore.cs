@@ -176,6 +176,45 @@ public sealed class ScoreStore(string path)
             FROM best WHERE pick = 1)
         """;
 
+    /// <summary>
+    /// Every board's #1, its count and where <paramref name="player"/> stands on it (#7) - over one month, or over all
+    /// time when <paramref name="month"/> is null. The same rule as <see cref="Ranked"/>, partitioned by board rather than
+    /// filtered to one, so the summary and a board's own page cannot rank differently: the best clear per visible player,
+    /// then score, then arrival.
+    /// </summary>
+    public List<BoardSummary> Summary(SqliteConnection c, string? month, Guid? player)
+    {
+        using SqliteCommand cmd = Command(c, """
+            WITH best AS (
+                SELECT s.level_file AS f, s.level_hash AS h, s.rules_version AS r, s.player_id, p.name, s.score, s.stars,
+                       s.rowid AS seq,
+                       ROW_NUMBER() OVER (PARTITION BY s.level_file, s.level_hash, s.rules_version, s.player_id
+                                          ORDER BY s.score DESC, s.rowid ASC) AS pick
+                FROM submissions s JOIN players p ON p.id = s.player_id
+                WHERE p.hidden = 0 AND ($month IS NULL OR s.month = $month)),
+            ranked AS (
+                SELECT f, h, r, player_id, name, score, stars,
+                       ROW_NUMBER() OVER (PARTITION BY f, h, r ORDER BY score DESC, seq ASC) AS rank,
+                       COUNT(*) OVER (PARTITION BY f, h, r) AS total
+                FROM best WHERE pick = 1)
+            SELECT t.f, t.h, t.r, t.total, t.name, t.score, t.stars, m.rank, m.score, m.stars
+            FROM ranked t LEFT JOIN ranked m ON m.f = t.f AND m.h = t.h AND m.r = t.r AND m.player_id = $p
+            WHERE t.rank = 1
+            ORDER BY t.f, t.h, t.r
+            """, ("$month", (object?)month ?? DBNull.Value), ("$p", (object?)player?.ToString() ?? DBNull.Value));
+
+        List<BoardSummary> boards = new();
+        using SqliteDataReader r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            BoardMe? me = r.IsDBNull(7) ? null : new BoardMe(r.GetInt32(7), r.GetInt32(8), r.GetInt32(9));
+            boards.Add(new BoardSummary(r.GetString(0), r.GetString(1), r.GetInt32(2), r.GetInt32(3),
+                new BoardTop(r.GetString(4), r.GetInt32(5), r.GetInt32(6)), me));
+        }
+
+        return boards;
+    }
+
     /// <summary>Where <paramref name="player"/> stands on a board; rank 0 when they are not on it.</summary>
     public (BoardRank Rank, int Score, int Stars) RankOf(SqliteConnection c, BoardKey board, string? month, Guid player)
     {
