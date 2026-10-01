@@ -190,6 +190,26 @@ public sealed class ProcessTests
         Assert.DoesNotContain("Exception", text);
     }
 
+    /// <summary>What the page prints reaches the owner's terminal with no control character in it but the line break.</summary>
+    [Fact]
+    public async Task The_admin_page_prints_no_control_character_to_its_terminal()
+    {
+        ProcessStartInfo start = new("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        foreach (string arg in new[] { Path.Combine(AppContext.BaseDirectory, "BS3D.Api.dll"), "admin", "web" })
+            start.ArgumentList.Add(arg);
+        // A line the page prints that quotes what it was given: an escape sequence that would retitle the window, and a bell
+        start.Environment["Scores__Database"] = Path.Combine(Path.GetTempPath(), "missing\u001b]0;owned\u0007.db");
+
+        using Process process = Process.Start(start)!;
+        Task<string> output = process.StandardOutput.ReadToEndAsync(), error = process.StandardError.ReadToEndAsync();
+        using (CancellationTokenSource exit = new(TimeSpan.FromSeconds(30))) await process.WaitForExitAsync(exit.Token);
+        string text = await output + await error;
+
+        Assert.Equal(1, process.ExitCode);
+        Assert.Contains("missing?]0;owned?.db", text);
+        Assert.DoesNotContain(text, c => char.IsControl(c) && c != '\n');
+    }
+
     private static async Task<bool> Connects(IPAddress address, int port)
     {
         using TcpClient tcp = new();

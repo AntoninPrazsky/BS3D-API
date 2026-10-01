@@ -4,6 +4,7 @@ using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.Logging.Console;
 
 namespace BS3D.Api.AdminWeb;
 
@@ -39,7 +40,12 @@ public static class AdminWebApp
         builder.WebHost.UseKestrelCore();
         builder.WebHost.ConfigureKestrel(k => k.Listen(IPAddress.Loopback, options.Port));
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
-        builder.Logging.AddSimpleConsole(o => o.SingleLine = true);
+        // No colours: they are escape sequences, which the terminal's filter would print as '?'
+        builder.Logging.AddSimpleConsole(o =>
+        {
+            o.SingleLine = true;
+            o.ColorBehavior = LoggerColorBehavior.Disabled;
+        });
         builder.Services.AddRoutingCore();
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<AdminSession>();
@@ -134,8 +140,13 @@ public static class AdminWebApp
     }
 
     /// <summary><c>BS3D.Api admin web [--port N]</c>: checks, starts, proves the address, prints the link, waits.</summary>
-    public static async Task<int> RunAsync(string[] args, TextWriter output)
+    public static async Task<int> RunAsync(string[] args)
     {
+        // The page's lines and the console logger's through one filter, set before anything is printed or built: the
+        // logger takes Console.Out when it is made
+        Console.SetOut(new TerminalWriter(Console.Out));
+        TextWriter output = Console.Out;
+
         int port = 5001;
         bool valid = args switch
         {
