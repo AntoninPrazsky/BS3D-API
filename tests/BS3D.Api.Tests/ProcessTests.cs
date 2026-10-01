@@ -70,6 +70,103 @@ public sealed class ProcessTests
         Assert.DoesNotContain("Request starting", text);
     }
 
+    /// <summary>
+    /// The admin page (issue #5) as its own process, in an environment that asks for more than loopback: an
+    /// <c>ASPNETCORE_URLS</c> on every address, a Kestrel endpoint from configuration, request logging turned up. It
+    /// listens on 127.0.0.1 and nowhere else, prints its link once and logs it nowhere, and stops when its terminal
+    /// goes away (SIGHUP).
+    /// </summary>
+    [Fact]
+    public async Task The_admin_page_listens_on_loopback_only_whatever_the_environment_asks()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        string folder = Path.Combine(Path.GetTempPath(), "bs3d-api-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        new ScoreStore(Path.Combine(folder, "scores.db")).EnsureSchema();
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        int port = FreePort(), urlsPort = FreePort(), endpointPort = FreePort();
+
+        ProcessStartInfo start = new("dotnet")
+        {
+            WorkingDirectory = folder,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (string arg in new[] { Path.Combine(AppContext.BaseDirectory, "BS3D.Api.dll"), "admin", "web", "--port", port.ToString() })
+            start.ArgumentList.Add(arg);
+        start.Environment["ASPNETCORE_URLS"] = $"http://0.0.0.0:{urlsPort}";
+        start.Environment["Kestrel__Endpoints__Lan__Url"] = $"http://0.0.0.0:{endpointPort}";
+        start.Environment["Logging__LogLevel__Default"] = "Trace";
+        start.Environment["Logging__LogLevel__Microsoft.AspNetCore"] = "Information";
+        start.Environment["Scores__Database"] = Path.Combine(folder, "scores.db");
+
+        StringBuilder log = new();
+        using Process process = new() { StartInfo = start };
+        process.OutputDataReceived += (_, e) => { lock (log) log.AppendLine(e.Data); };
+        process.ErrorDataReceived += (_, e) => { lock (log) log.AppendLine(e.Data); };
+        process.Start();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        string Log() { lock (log) return log.ToString(); }
+
+        try
+        {
+            string? link = null;
+            for (int i = 0; i < 300 && link == null && !process.HasExited; i++)
+            {
+                link = Log().Split('\n').FirstOrDefault(l => l.Contains("/login?key="))?.Split(": ", 2).Last().Trim();
+                if (link == null) await Task.Delay(100);
+            }
+            Assert.True(link != null, $"no link was printed:\n{Log()}");
+
+            Assert.True(await Connects(IPAddress.Loopback, port), "the page does not answer on 127.0.0.1");
+            Assert.False(await Connects(IPAddress.Loopback, urlsPort), "ASPNETCORE_URLS opened a listener");
+            Assert.False(await Connects(IPAddress.Loopback, endpointPort), "Kestrel:Endpoints opened a listener");
+            foreach (IPAddress lan in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces()
+                .SelectMany(n => n.GetIPProperties().UnicastAddresses).Select(a => a.Address)
+                .Where(a => a.AddressFamily == AddressFamily.InterNetwork && !IPAddress.IsLoopback(a)))
+                Assert.False(await Connects(lan, port), $"the page answers on {lan}");
+
+            using HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+            HttpResponseMessage login = await client.GetAsync(link);
+            Assert.Equal(HttpStatusCode.SeeOther, login.StatusCode);
+            HttpRequestMessage overview = new(HttpMethod.Get, $"http://127.0.0.1:{port}/");
+            overview.Headers.Add("Cookie", login.Headers.GetValues("Set-Cookie").Single().Split(';')[0]);
+            Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(overview)).StatusCode);
+
+            using (Process hup = Process.Start("kill", ["-HUP", process.Id.ToString()])) await hup.WaitForExitAsync();
+            using CancellationTokenSource exit = new(TimeSpan.FromSeconds(15));
+            await process.WaitForExitAsync(exit.Token);
+            Assert.Equal(0, process.ExitCode);
+        }
+        finally
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            Directory.Delete(folder, recursive: true);
+        }
+
+        string text = Log();
+        Assert.Single(text.Split('\n'), line => line.Contains("key="));
+        Assert.DoesNotContain("Request starting", text);
+        Assert.Contains("The admin page has stopped.", text);
+    }
+
+    private static async Task<bool> Connects(IPAddress address, int port)
+    {
+        using TcpClient tcp = new();
+        try
+        {
+            await tcp.ConnectAsync(address, port).WaitAsync(TimeSpan.FromSeconds(2));
+            return true;
+        }
+        catch (Exception e) when (e is SocketException or TimeoutException)
+        {
+            return false;
+        }
+    }
+
     private static int FreePort()
     {
         using TcpListener listener = new(IPAddress.Loopback, 0);

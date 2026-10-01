@@ -66,12 +66,21 @@ public sealed class Refusals(IOptions<ScoresOptions> options)
 public sealed class RefusalFlusher(Refusals refusals, ScoreStore store, TimeProvider clock, IOptions<ScoresOptions> options,
     ILogger<RefusalFlusher> log) : BackgroundService
 {
+    // Made with the service, not in ExecuteAsync, which .NET 10 starts on the thread pool: the period then counts from
+    // the service's start, whenever the loop gets its thread
+    private readonly PeriodicTimer _timer = new(TimeSpan.FromSeconds(Math.Max(1, options.Value.RefusalFlushSeconds)), clock);
+
+    public override void Dispose()
+    {
+        _timer.Dispose();
+        base.Dispose();
+    }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        using PeriodicTimer timer = new(TimeSpan.FromSeconds(Math.Max(1, options.Value.RefusalFlushSeconds)), clock);
         try
         {
-            while (await timer.WaitForNextTickAsync(stoppingToken)) Flush();
+            while (await _timer.WaitForNextTickAsync(stoppingToken)) Flush();
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
