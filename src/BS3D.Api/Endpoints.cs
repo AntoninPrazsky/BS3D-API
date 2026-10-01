@@ -27,6 +27,7 @@ public static partial class Endpoints
     {
         app.MapPost("/v1/scores", PostScore);
         app.MapGet("/v1/boards/{file}", GetBoard);
+        app.MapGet("/v1/boards", GetBoards);
         app.MapPut("/v1/players/{id:guid}", PutPlayer);
         app.MapDelete("/v1/players/{id:guid}", DeletePlayer);
     }
@@ -175,6 +176,36 @@ public static partial class Endpoints
 
         return Results.Json(new BoardPage(allTime ? "all" : "month", boardMonth, store.Total(c, board, boardMonth),
             store.Page(c, board, boardMonth, take, skip), me), Json);
+    }
+
+    /// <summary>
+    /// Every board's #1 and the asking player's place on it, in one answer (#7): the game's High Scores screen, which would
+    /// otherwise ask the per-board GET once per level - over a hundred requests against a Cloudflare rule of fifty in ten
+    /// seconds. The period and the month are read exactly as <see cref="GetBoard"/> reads them. With
+    /// <see cref="ScoresOptions.RequireKnownBoard"/> on, only boards a ceiling table names are listed: a board from a level
+    /// hash no table names any more is not one the game can show.
+    /// </summary>
+    private static IResult GetBoards(string? period, string? month, Guid? player, ScoreStore store, Ceilings ceilings,
+        IOptions<ScoresOptions> options, TimeProvider clock, ILogger<ScoreStore> log, HttpContext http)
+    {
+        bool allTime = string.Equals(period, "all", StringComparison.OrdinalIgnoreCase);
+        if (!allTime && period != null && !string.Equals(period, "month", StringComparison.OrdinalIgnoreCase))
+            return Refuse(log, http, 400, Reasons.BadRequest, $"period '{period}'");
+
+        string? boardMonth = null;
+        if (!allTime)
+        {
+            boardMonth = month ?? ScoreStore.MonthOf(clock.GetUtcNow());
+            if (!DateTime.TryParseExact(boardMonth, "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
+                return Refuse(log, http, 400, Reasons.BadRequest, $"month '{month}'");
+        }
+
+        using SqliteConnection c = store.Open();
+        List<BoardSummary> boards = store.Summary(c, boardMonth, player);
+
+        if (options.Value.RequireKnownBoard) boards.RemoveAll(b => !ceilings.TryGet(b.File, b.Hash, b.Rules, out _));
+
+        return Results.Json(new BoardsSummary(allTime ? "all" : "month", boardMonth, boards), Json);
     }
 
     private static IResult PutPlayer(Guid id, NameBody? body, HttpContext http, ScoreStore store, IOptions<ScoresOptions> options,
