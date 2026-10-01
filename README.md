@@ -95,6 +95,14 @@ admin rename <player id> <nickname>
 admin export > export.jsonl
 ```
 
+**The admin page** (#5, read-only): an overview (players, clears and refusals per day, the database, the newest backup) and a live view of the newest clears and refusals. It is a separate process on the Pi's loopback, never behind the tunnel, and lives as long as the terminal that started it:
+
+```bash
+cd / && sudo -u bs3d-api env Scores__Database=/var/lib/bs3d-api/scores.db /opt/bs3d-api/current/BS3D.Api admin web
+```
+
+It prints a link that works once, for 5 minutes: open it in the Pi's own browser, or from the desktop through `ssh -L 5001:127.0.0.1:5001 rdt@<the Pi>`. It stops after 30 minutes without use, when the terminal closes, or with Ctrl+C. A shorter launcher comes with the next part of #5.
+
 The service's log: `journalctl -u bs3d-api -f` (no sudo needed for a member of `adm`). It holds the start, the ceiling tables loaded and one entry per refusal, never an accepted submission or a client's address. An entry is two journal lines, `info: BS3D.Api.ScoreStore[0]` and then `Refused <method> <path>: <status> <reason> (<detail>)`, so `journalctl -u bs3d-api | grep Refused` lists the refusals. Since v0.1.4 the service also writes them to its database, for the admin page (#5): every refusal counted per day and reason in `refusal_days`, the last 7 days of them in `refusal_log`. On Raspberry Pi OS the journal lives in memory and is gone after a reboot.
 
 ### Hardening the Pi (issue #4)
