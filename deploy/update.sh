@@ -30,7 +30,11 @@ curl -fsSL "https://github.com/$REPO/releases/download/$version/$name.tar.gz.sha
 
 rm -rf "${ROOT:?}/$version"
 mkdir -p "$ROOT/$version"
-tar -xzf "$work/$name.tar.gz" -C "$ROOT/$version"
+# Everything here is root's, because root runs it: the binary, this script's successor and update-ceilings.sh. tar run
+# as root keeps an archive's owners, and v0.1.0 and v0.1.1 carry the GitHub runner's uid and gid 1001 (issue #3).
+tar --no-same-owner -xzf "$work/$name.tar.gz" -C "$ROOT/$version"
+foreign=$(find "$ROOT/$version" \( ! -user root -o ! -group root \) -print -quit)
+[[ -z "$foreign" ]] || { echo "refusing $version: $foreign is not owned by root:root" >&2; exit 1; }
 chmod +x "$ROOT/$version/BS3D.Api" "$ROOT/$version"/deploy/*.sh
 
 count() {
