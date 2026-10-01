@@ -49,7 +49,11 @@ jobs:
           cp deploy/* publish/deploy/
           chmod +x publish/BS3D.Api publish/deploy/*.sh
           test -f publish/libcoreclr.so || { echo "not a self-contained publish"; exit 1; }
-          tar -czf "$BUILD_NAME.tar.gz" -C publish .
+          # Every entry root's (issue #3): the runner's own uid and gid, 1001, would otherwise travel in the archive, and
+          # tar run as root on the Pi keeps an archive's owners. There 1001 is a free uid and the group hardinfo2.
+          tar -czf "$BUILD_NAME.tar.gz" --owner=0 --group=0 --numeric-owner -C publish .
+          owners=$(tar --numeric-owner -tvzf "$BUILD_NAME.tar.gz" | awk '{print $2}' | sort -u)
+          [ "$owners" = "0/0" ] || { echo "archive entries are not all 0/0: $owners"; exit 1; }
           sha256sum "$BUILD_NAME.tar.gz" > "$BUILD_NAME.tar.gz.sha256"
           ls -la "$BUILD_NAME".tar.gz*
 

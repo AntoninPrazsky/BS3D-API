@@ -43,7 +43,7 @@ To rotate the token: create a new one in the dashboard, `sudo cloudflared servic
 sudo /opt/bs3d-api/current/deploy/update.sh latest       # or a tag: v0.2.0
 ```
 
-It downloads the release and its checksum, verifies it, extracts it beside the old version, switches `current`, restarts and waits for `/v1/health` — and switches back if the new version does not answer. It prints the row counts before and after; they must be equal. The old version's folder stays until you delete it.
+It downloads the release and its checksum, verifies it, extracts it beside the old version with every file owned by root (it refuses the version otherwise), switches `current`, restarts and waits for `/v1/health` — and switches back if the new version does not answer. It prints the row counts before and after; they must be equal. The old version's folder stays until you delete it.
 
 After a **game** release, fetch its ceiling table: `sudo /opt/bs3d-api/current/deploy/update-ceilings.sh` (it restarts the service when a new table arrived).
 
