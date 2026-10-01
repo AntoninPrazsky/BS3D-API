@@ -12,11 +12,19 @@ namespace BS3D.Api;
 public sealed class Ceilings
 {
     private readonly Dictionary<(string File, string Hash, int Rules), CeilingRow> _boards = new();
+    private readonly Dictionary<string, (int Position, string? Block)> _levels = new();
 
     public int Count => _boards.Count;
 
     /// <summary>Every board known, for the admin page's list (issue #5).</summary>
     public IReadOnlyCollection<CeilingRow> All => _boards.Values;
+
+    /// <summary>
+    /// Where each level's file stands in play order, and its chapter (a level set's <c>block</c>): from the last table
+    /// read that names the file, one that names a chapter before one that does not. A level's every version shares it,
+    /// and the admin page lists the boards by it (issue #5). Nothing checks or ranks by it.
+    /// </summary>
+    public IReadOnlyDictionary<string, (int Position, string? Block)> Levels => _levels;
 
     public bool TryGet(string file, string hash, int rules, out CeilingRow row) =>
         _boards.TryGetValue((file, hash, rules), out row!);
@@ -43,8 +51,12 @@ public sealed class Ceilings
                     continue;
                 }
 
-                foreach (CeilingRow row in table.Levels)
-                    ceilings.Add(row);
+                // ScoreSim writes the rows in play order
+                for (int i = 0; i < table.Levels.Count; i++)
+                {
+                    ceilings.Add(table.Levels[i]);
+                    ceilings.Place(table.Levels[i], i);
+                }
 
                 logger.LogInformation("Ceilings: {Count} board(s) from {Path}", table.Levels.Count, Path.GetFileName(path));
             }
@@ -69,6 +81,12 @@ public sealed class Ceilings
             _boards[key] = row;
     }
 
+    private void Place(CeilingRow row, int position)
+    {
+        if (row.Block != null || !_levels.TryGetValue(row.File, out var placed) || placed.Block == null)
+            _levels[row.File] = (position, row.Block);
+    }
+
     private sealed record CeilingTable(
         [property: JsonPropertyName("format")] string? Format,
         [property: JsonPropertyName("version")] int Version,
@@ -78,7 +96,7 @@ public sealed class Ceilings
     }
 }
 
-/// <summary>One level of a ceiling table, as ScoreSim writes it.</summary>
+/// <summary>One level of a ceiling table, as ScoreSim writes it, with its chapter in a table that names one (<see cref="Ceilings.Levels"/>).</summary>
 public sealed record CeilingRow(
     [property: JsonPropertyName("file")] string File,
     [property: JsonPropertyName("name")] string? Name,
@@ -86,4 +104,5 @@ public sealed record CeilingRow(
     [property: JsonPropertyName("rulesVersion")] int RulesVersion,
     [property: JsonPropertyName("shots")] int Shots,
     [property: JsonPropertyName("ceiling")] int Ceiling,
-    [property: JsonPropertyName("minShots")] int MinShots);
+    [property: JsonPropertyName("minShots")] int MinShots,
+    [property: JsonPropertyName("block")] string? Block = null);

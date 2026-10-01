@@ -52,6 +52,59 @@ public sealed class AdminViewTests
         Assert.Matches(@">Unknown\.json</a> <span class=""flag"">in no ceiling table</span>", html);
     }
 
+    /// <summary>The boards list's levels, top to bottom.</summary>
+    private static List<string> Levels(string html) =>
+        Regex.Matches(html, @"<tr><td><a href=""/board\?[^""]*"">([^<]*)</a>").Select(m => WebUtility.HtmlDecode(m.Groups[1].Value)).ToList();
+
+    /// <summary>The boards list's chapter headings, top to bottom.</summary>
+    private static List<string> Chapters(string html) =>
+        Regex.Matches(html, @"<tr class=""group""><th colspan=""8""><bdi>([^<]*)</bdi>").Select(m => WebUtility.HtmlDecode(m.Groups[1].Value)).ToList();
+
+    private static void WriteTable(AdminPage page, string name, params string[] levels)
+    {
+        Directory.CreateDirectory(page.Options.CeilingsDirectory);
+        File.WriteAllText(Path.Combine(page.Options.CeilingsDirectory, name),
+            $$"""{ "format": "bs3d-ceilings", "version": 1, "rulesVersion": 1, "hashLength": 16, "levels": [ {{string.Join(", ", levels)}} ] }""");
+    }
+
+    /// <summary>A table's row for <paramref name="file"/>, named after it, in <paramref name="block"/> when one is given.</summary>
+    private static string Level(string file, string hash, string? block = null) =>
+        $$"""{ "file": "{{file}}", "name": "{{file[..^5]}}", "hash": "{{hash}}", "rulesVersion": 1, "shots": 20, "ceiling": 40000, "minShots": 2{{(block == null ? "" : $", \"block\": \"{block}\"")}} }""";
+
+    [Fact]
+    public async Task Without_chapters_the_boards_come_in_play_order()
+    {
+        await using AdminPage page = await AdminPage.StartAsync();
+        WriteTable(page, "BS3D-v9.9.9-ceilings.json", Level("Zed.json", "1111111111111111"), Level("Ann.json", "2222222222222222"), Level("Bob.json", "3333333333333333"));
+        await page.LogInAsync();
+
+        string html = await page.Client.GetStringAsync("/boards");
+
+        Assert.Equal(["Zed", "Ann", "Bob"], Levels(html));
+        Assert.Empty(Chapters(html));
+        Assert.Contains("in play order (the tables name no chapters)", html);
+    }
+
+    [Fact]
+    public async Task The_boards_come_chapter_by_chapter_where_a_table_names_them()
+    {
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, "Ann"), 50, board: Unknown));
+        // A newer development build's table names chapters, and the older release's, read after it (names sort so), does
+        // not: Bob's older version stands with the newer one in its chapter, and the older table takes no chapter away
+        WriteTable(page, "BS3D-v9.9.8-ceilings.json", Level("Bob.json", "4444444444444444"), Level("Zed.json", "1111111111111111"));
+        WriteTable(page, "BS3D-dev-abc1234-ceilings.json", Level("Zed.json", "1111111111111111", "The Valley"), Level("Ann.json", "2222222222222222", "The Valley"),
+            Level("Bob.json", "3333333333333333", "The Tower"), Level("Cid.json", "5555555555555555"));
+        await page.LogInAsync();
+
+        string html = await page.Client.GetStringAsync("/boards");
+
+        Assert.Equal(["The Valley", "The Tower", "Without a chapter", "In no ceiling table"], Chapters(html));
+        Assert.Equal(["Zed", "Ann", "Bob", "Bob", "Cid", "Unknown.json"], Levels(html));
+        Assert.Contains("<bdi>The Tower</bdi> <span>2 boards</span>", html);
+        Assert.Contains("chapter by chapter in play order", html);
+    }
+
     [Fact]
     public async Task The_boards_say_so_when_no_ceiling_table_was_read()
     {

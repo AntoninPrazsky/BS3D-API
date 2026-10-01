@@ -67,6 +67,8 @@ public static partial class AdminPages
         td.t { color: var(--muted); }
         .sorted { color: var(--fg); }
         .sorted::after { content: " \25BE"; }
+        tr.group th { padding-top: 1.1rem; background: var(--surface); color: var(--fg); font-size: .74rem; letter-spacing: .08em; border-bottom: 1px solid var(--line-strong); }
+        tr.group th span { margin-left: .5rem; color: var(--faint); font-weight: 500; letter-spacing: .02em; text-transform: none; }
         table.facts th { width: 14rem; background: transparent; color: var(--muted); font-size: .85rem; font-weight: 500; text-transform: none; letter-spacing: 0; }
         table.facts td { white-space: normal; }
 
