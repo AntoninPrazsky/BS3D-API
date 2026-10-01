@@ -15,6 +15,9 @@ public sealed class Ceilings
 
     public int Count => _boards.Count;
 
+    /// <summary>Every board known, for the admin page's list (issue #5).</summary>
+    public IReadOnlyCollection<CeilingRow> All => _boards.Values;
+
     public bool TryGet(string file, string hash, int rules, out CeilingRow row) =>
         _boards.TryGetValue((file, hash, rules), out row!);
 

@@ -95,10 +95,10 @@ admin rename <player id> <nickname>
 admin export > export.jsonl
 ```
 
-**The admin page** (#5, read-only): an overview (players, clears and refusals per day, the database, the newest backup) and a live view of the newest clears and refusals. It is a separate process on the Pi's loopback, never behind the tunnel, and lives as long as the terminal that started it:
+**The admin page** (#5, read-only): an overview (players, clears and refusals per day, the database, the newest backup), a live view of the newest clears and refusals, every board ranked as the game sees it (its hidden players apart), and every player with their clears, how many addresses they came from and whom they share one with (never the addresses themselves). It is a separate process on the Pi's loopback, never behind the tunnel, and lives as long as the terminal that started it:
 
 ```bash
-cd / && sudo -u bs3d-api env Scores__Database=/var/lib/bs3d-api/scores.db /opt/bs3d-api/current/BS3D.Api admin web
+cd / && sudo -u bs3d-api env Scores__Database=/var/lib/bs3d-api/scores.db Scores__CeilingsDirectory=/var/lib/bs3d-api/ceilings /opt/bs3d-api/current/BS3D.Api admin web
 ```
 
 It prints a link that works once, for 5 minutes: open it in the Pi's own browser, or from the desktop through `ssh -L 5001:127.0.0.1:5001 rdt@<the Pi>`. It stops after 30 minutes without use, when the terminal closes, or with Ctrl+C. A shorter launcher comes with the next part of #5.

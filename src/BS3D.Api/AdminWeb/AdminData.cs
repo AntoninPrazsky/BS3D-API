@@ -7,7 +7,7 @@ namespace BS3D.Api.AdminWeb;
 /// What the admin page reads (issue #5, requirements 11–13): a read-only connection to the live database, and only
 /// named columns. <c>token_hash</c> and <c>ip_hash</c> are never selected, so no page can show them.
 /// </summary>
-public sealed class AdminData(AdminWebOptions options)
+public sealed partial class AdminData(AdminWebOptions options)
 {
     public sealed record Overview(
         long SchemaVersion, int Players, int HiddenPlayers, int Submissions, int HiddenSubmissions,

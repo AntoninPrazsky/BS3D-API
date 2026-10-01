@@ -179,16 +179,21 @@ public sealed class AdminWebTests
         const string script = "<script>alert(1)</script>";
         const string reversed = "\u202Eevil";
         const string image = "<img src=x onerror=alert(2)>";
+        Guid scripted = Guid.Empty;
+        BoardKey hostile = new("<script>x.json", "<img src=y>", 1);
         await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
         {
-            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, script), 100);
+            scripted = AdminPage.AddPlayer(store, c, now, script);
+            AdminPage.AddClear(store, c, now, scripted, 100);
+            AdminPage.AddClear(store, c, now, scripted, 100, board: hostile);
             AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, reversed), 100);
             store.WriteRefusals(c, new Refusals.Batch(new Dictionary<(string, string), int> { [("2026-09-15", Reasons.BadName)] = 1 },
                 [new Refusals.Entry(now, 422, Reasons.BadName, "POST", "/v1/scores", image)], 0), now, TimeSpan.FromDays(7), 100);
         });
         await page.LogInAsync();
 
-        foreach (string path in new[] { "/", "/live" })
+        foreach (string path in new[] { "/", "/live", "/boards", "/players", $"/player?id={scripted}",
+                     $"/board?file={Uri.EscapeDataString(hostile.File)}&hash={Uri.EscapeDataString(hostile.Hash)}&rules=1" })
         {
             string html = await page.Client.GetStringAsync(path);
             Assert.DoesNotContain("<script", html);
@@ -206,11 +211,16 @@ public sealed class AdminWebTests
     {
         const string token = "AAAAtokenhashtokenhashtokenhashtokenhashtokenhashtokenhash000000";
         const string address = "BBBBaddresshash1";
+        Guid ann = Guid.Empty;
         await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
-            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, "Ann", token), 100, address));
+        {
+            ann = AdminPage.AddPlayer(store, c, now, "Ann", token);
+            AdminPage.AddClear(store, c, now, ann, 100, address);
+        });
+        page.WriteCeilingTable();
         await page.LogInAsync();
 
-        foreach (string path in new[] { "/", "/live" })
+        foreach (string path in new[] { "/", "/live", "/boards", "/players", $"/player?id={ann}", $"/board?file={Api.File}&hash={Api.Hash}&rules={Api.Rules}" })
         {
             string html = await page.Client.GetStringAsync(path);
             Assert.DoesNotContain(token[..8], html);
