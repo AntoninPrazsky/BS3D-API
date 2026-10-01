@@ -288,4 +288,20 @@ public sealed class AdminWebTests
 
         Assert.True(await page.StopsWithin());
     }
+
+    [Fact]
+    public void The_terminal_gets_no_control_character_but_the_line_break()
+    {
+        StringWriter terminal = new() { NewLine = "\n" };
+        TerminalWriter writer = new(terminal);
+
+        // ESC and BEL (C0), CSI (C1, which some terminals take on its own), a carriage return to write over a line, DEL
+        writer.Write("a\u001b]0;owned\u0007b");
+        writer.Write('\u009b');
+        writer.Write("2J\rc\td\u007f".ToCharArray(), 0, 7);
+        writer.WriteLine("e\u001b[31m");
+        writer.Write("f\n");
+
+        Assert.Equal("a?]0;owned?b?2J?c?d?e?[31m\nf\n", terminal.ToString());
+    }
 }

@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
 
 // The admin page (issue #5) is its own process, built before anything of the public service and never migrating it
-if (args is ["admin", "web", ..]) return await AdminWebApp.RunAsync(args[2..], Console.Out);
+if (args is ["admin", "web", ..]) return await AdminWebApp.RunAsync(args[2..]);
 
 bool admin = args.Length > 0 && args[0] == "admin";
 // The content root is the service's own folder, not the working directory (issue #3): systemd starts it in
