@@ -11,13 +11,18 @@ public static partial class AdminPages
         int unknown = boards.Count(b => !b.Known);
         Markup missing = noTables == null ? default
             : Html.M($"<p class=\"warn\">No ceiling table in <code>{noTables}</code> (Scores__CeilingsDirectory): only the boards with clears are listed.</p>");
-        Markup rows = Html.Join(boards.Select(b => Html.M($"""
-            <tr><td><a href="{BoardLink(b.Key)}">{b.Name ?? b.Key.File}</a>{(b.Known ? default : Html.M($" <span class=\"flag\">in no ceiling table</span>"))}</td>
+        // Each chapter under its name, when a table names chapters; the boards no table names last, under theirs
+        bool chaptered = boards.Any(b => b.Chapter != null);
+        static string Group(AdminData.BoardRow b) => !b.Known ? "In no ceiling table" : b.Chapter ?? "Without a chapter";
+        Markup Heading(int i) => !chaptered || (i > 0 && Group(boards[i - 1]) == Group(boards[i])) ? default
+            : Html.M($"<tr class=\"group\"><th colspan=\"8\"><bdi>{Group(boards[i])}</bdi> <span>{boards.Skip(i).TakeWhile(b => Group(b) == Group(boards[i])).Count()} boards</span></th></tr>");
+        Markup rows = Html.Join(boards.Select((b, i) => Html.M($"""
+            {Heading(i)}<tr><td><a href="{BoardLink(b.Key)}">{b.Name ?? b.Key.File}</a>{(b.Known ? default : Html.M($" <span class=\"flag\">in no ceiling table</span>"))}</td>
             <td><code>{b.Key.File}#{b.Key.Hash} r{b.Key.Rules}</code></td><td class="n">{(b.Ceiling is int c ? c.ToString("N0", CultureInfo.InvariantCulture) : "")}</td>
             <td class="n">{b.Shots}</td><td class="n">{b.MonthPlayers}</td><td class="n">{b.AllPlayers}</td><td class="n">{b.Clears}</td><td class="t">{Stamp(b.LastClear)}</td></tr>
             """)));
         return Layout("Boards", Html.M($"""
-            {missing}<p class="note">{boards.Count} boards: every board a ceiling table names{(unknown > 0 ? Html.M($", and {unknown} with clears that no table names") : default)}. Players count each visible player once; hidden players are not counted, as on the game's boards.</p>
+            {missing}<p class="note">{boards.Count} boards: every board a ceiling table names{(unknown > 0 ? Html.M($", and {unknown} with clears that no table names") : default)}, {(chaptered ? "chapter by chapter in play order" : "in play order (the tables name no chapters)")}. Players count each visible player once; hidden players are not counted, as on the game's boards.</p>
             <div class="panel"><table><tr><th>Level</th><th>Board</th><th class="n">Ceiling</th><th class="n">Shots</th><th class="n">Players {month}</th><th class="n">Players all time</th><th class="n">Clears</th><th>Last clear (UTC)</th></tr>{rows}</table></div>
             """), refresh: false);
     }

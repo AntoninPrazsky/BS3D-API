@@ -10,8 +10,9 @@ namespace BS3D.Api.AdminWeb;
 /// </summary>
 public sealed partial class AdminData
 {
+    /// <param name="Chapter">The level's chapter (a level set's <c>block</c>), when a ceiling table names one for its file.</param>
     public sealed record BoardRow(BoardKey Key, string? Name, int? Ceiling, int? Shots, int MonthPlayers, int AllPlayers,
-        int Clears, DateTimeOffset? LastClear, bool Known);
+        int Clears, DateTimeOffset? LastClear, bool Known, string? Chapter = null);
 
     public sealed record HiddenEntry(Guid Player, string Name, int Score, int Stars, int Clears);
 
@@ -43,7 +44,11 @@ public sealed partial class AdminData
 
     public Ceilings LoadCeilings() => Ceilings.Load(options.CeilingsDirectory, NullLogger.Instance);
 
-    /// <summary>Every board a ceiling table names, and every board with a clear on it, by name.</summary>
+    /// <summary>
+    /// Every board a ceiling table names, chapter by chapter in play order, then every board with a clear on it that no
+    /// table names. Place and chapter belong to a level's file (<see cref="Ceilings.Levels"/>), so every version of a
+    /// level stands together, in its chapter.
+    /// </summary>
     public IReadOnlyList<BoardRow> ReadBoards(Ceilings ceilings)
     {
         using SqliteConnection c = Open();
@@ -60,17 +65,27 @@ public sealed partial class AdminData
             while (r.Read())
                 counts[new BoardKey(r.GetString(0), r.GetString(1), r.GetInt32(2))] = (r.GetInt32(3), r.GetInt32(4), r.GetInt32(5), Time(r.GetString(6)));
 
-        List<BoardRow> rows = ceilings.All.Select(row =>
+        var known = ceilings.All.Select(row =>
         {
             BoardKey key = new(row.File, row.Hash, row.RulesVersion);
             var n = counts.GetValueOrDefault(key);
-            return new BoardRow(key, row.Name, row.Ceiling, row.Shots, n.Month, n.All, n.Clears, n.Last, Known: true);
+            var (position, chapter) = ceilings.Levels[row.File];
+            return (Row: new BoardRow(key, row.Name, row.Ceiling, row.Shots, n.Month, n.All, n.Clears, n.Last, Known: true, chapter), Position: position);
         }).ToList();
-        HashSet<BoardKey> known = rows.Select(r => r.Key).ToHashSet();
-        rows.AddRange(counts.Where(n => !known.Contains(n.Key))
-            .Select(n => new BoardRow(n.Key, null, null, null, n.Value.Month, n.Value.All, n.Value.Clears, n.Value.Last, Known: false)));
-        return rows.OrderBy(r => r.Known).ThenBy(r => r.Name ?? r.Key.File, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.Key.Hash, StringComparer.Ordinal).ToList();
+        // A chapter comes where its first level does, its name settling a tie so that two chapters never mix; levels
+        // without one come after every chapter
+        Dictionary<string, int> opens = known.Where(k => k.Row.Chapter != null)
+            .GroupBy(k => k.Row.Chapter!).ToDictionary(g => g.Key, g => g.Min(k => k.Position));
+        HashSet<BoardKey> named = known.Select(k => k.Row.Key).ToHashSet();
+        return known
+            .OrderBy(k => k.Row.Chapter is { } chapter ? opens[chapter] : int.MaxValue)
+            .ThenBy(k => k.Row.Chapter, StringComparer.Ordinal).ThenBy(k => k.Position)
+            .ThenBy(k => k.Row.Name ?? k.Row.Key.File, StringComparer.OrdinalIgnoreCase).ThenBy(k => k.Row.Key.Hash, StringComparer.Ordinal)
+            .Select(k => k.Row)
+            .Concat(counts.Where(n => !named.Contains(n.Key)).OrderBy(n => n.Key.File, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(n => n.Key.Hash, StringComparer.Ordinal)
+                .Select(n => new BoardRow(n.Key, null, null, null, n.Value.Month, n.Value.All, n.Value.Clears, n.Value.Last, Known: false)))
+            .ToList();
     }
 
     /// <summary>One board as <c>GET /v1/boards</c> answers it, this month and all time, and its hidden players apart. Null when nothing knows it.</summary>
