@@ -21,13 +21,14 @@ install -d -m 0755 /opt/bs3d-api
 install -d -m 0700 /etc/bs3d-api
 
 # The salt for hashed addresses: made once, on the box, never shown and never committed
+# (umask in a subshell: up to v0.1.8 it outlived this block, and the units below came out 0600)
 if [[ ! -f /etc/bs3d-api/env ]]; then
-    umask 077
-    echo "Scores__AddressSalt=$(head -c 32 /dev/urandom | base64 | tr -d '=+/\n')" > /etc/bs3d-api/env
+    (umask 077 && echo "Scores__AddressSalt=$(head -c 32 /dev/urandom | base64 | tr -d '=+/\n')" > /etc/bs3d-api/env)
     echo "made /etc/bs3d-api/env with a fresh salt"
 fi
 
-# The newest release, which carries these scripts and the unit files beside the service
+# The newest release, which carries these scripts and the unit files beside the service. update.sh puts the release's
+# units in place over these from main; they are here first so that the service can be enabled before it.
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "https://raw.githubusercontent.com/$REPO/main/deploy/update.sh" -o "$tmp/update.sh"
