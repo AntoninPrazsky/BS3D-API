@@ -13,14 +13,20 @@ public static partial class AdminPages
     public static readonly string Version =
         typeof(AdminPages).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "?";
 
+    /// <summary>The version with its commit cut to seven characters, for the footer.</summary>
+    internal static readonly string ShortVersion = Version.Split('+') is [var number, var commit] ? $"{number}+{commit[..Math.Min(7, commit.Length)]}" : Version;
+
+    /// <summary>The tabs; a page that is not one of them names the one it belongs to.</summary>
+    private static readonly (string Href, string Name)[] Sections = [("/", "Overview"), ("/live", "Live"), ("/boards", "Boards"), ("/players", "Players")];
+
     public static string Overview(AdminData.Overview o, DateTimeOffset now)
     {
         Markup warning = o.SchemaVersion == ScoreStore.SchemaVersion ? default
             : Html.M($"<p class=\"warn\">The database is at schema {o.SchemaVersion}; this page reads schema {ScoreStore.SchemaVersion}. It never migrates: update the service first.</p>");
 
         Markup backup = o.NewestBackup is { } b
-            ? Html.M($"{b.Name}, {Size(b.Bytes)}, {Ago(now - b.Written)}")
-            : Html.M($"none found next to the database");
+            ? Html.M($"<strong>{Ago(now - b.Written)}</strong><small>{b.Name} · {Size(b.Bytes)}</small>")
+            : Html.M($"<strong>none</strong><small>none found next to the database</small>");
 
         Dictionary<string, AdminData.Day> byDate = o.Days.ToDictionary(d => d.Date);
         Markup days = Html.Join(Enumerable.Range(0, AdminData.Days).Select(i =>
@@ -36,51 +42,49 @@ public static partial class AdminPages
 
         return Layout("Overview", Html.M($"""
             {warning}
-            <table class="facts">
-            <tr><th>Players</th><td>{o.Players} ({o.HiddenPlayers} hidden)</td></tr>
-            <tr><th>Accepted clears</th><td>{o.Submissions} ({o.HiddenSubmissions} by hidden players)</td></tr>
-            <tr><th>Database</th><td>{Size(o.DatabaseBytes)}, schema {o.SchemaVersion}</td></tr>
-            <tr><th>Newest backup</th><td>{backup}</td></tr>
-            <tr><th>This page</th><td>BS3D.Api {Version}</td></tr>
-            </table>
-            <h2>The last {AdminData.Days} days (UTC)</h2>
-            <table><tr><th>Day</th><th>Accepted clears</th><th>New players</th></tr>{days}</table>
-            <h2>Refusals (UTC days)</h2>
-            <table><tr><th>Day</th><th>Reason</th><th>Count</th></tr>{refusals}</table>
+            <div class="stats">
+            <div class="stat"><span>Players</span><strong>{o.Players}</strong><small>{o.HiddenPlayers} hidden</small></div>
+            <div class="stat"><span>Accepted clears</span><strong>{o.Submissions}</strong><small>{o.HiddenSubmissions} by hidden players</small></div>
+            <div class="stat"><span>Database</span><strong>{Size(o.DatabaseBytes)}</strong><small>schema {o.SchemaVersion}</small></div>
+            <div class="stat"><span>Newest backup</span>{backup}</div>
+            </div>
+            <div class="cols">
+            <section><h2>The last {AdminData.Days} days (UTC)</h2>
+            <div class="panel"><table><tr><th>Day</th><th class="n">Accepted clears</th><th class="n">New players</th></tr>{days}</table></div></section>
+            <section><h2>Refusals (UTC days)</h2>
+            <div class="panel"><table><tr><th>Day</th><th>Reason</th><th class="n">Count</th></tr>{refusals}</table></div></section>
+            </div>
             """), refresh: false);
     }
 
     public static string Live(IReadOnlyList<AdminData.Event> events) =>
         Layout("Live", Html.M($"""
             <p class="note">The newest {events.Count} accepted clears and refusals, newest first. Reloads every 5 seconds.</p>
-            <table><tr><th>When (UTC)</th><th></th><th>What</th><th>Detail</th></tr>{Html.Join(events.Select(e => Html.M($"""
-                <tr class="{(e.Accepted ? "ok" : "refused")}"><td>{e.At:yyyy-MM-dd HH:mm:ss}</td><td>{(e.Accepted ? "accepted" : "refused")}</td><td><bdi>{e.What}</bdi></td><td><bdi>{e.Detail}</bdi></td></tr>
-                """)))}</table>
+            <div class="panel"><table><tr><th>When (UTC)</th><th>Result</th><th>What</th><th>Detail</th></tr>{Html.Join(events.Select(e => Html.M($"""
+                <tr class="{(e.Accepted ? "ok" : "refused")}"><td class="t">{e.At:yyyy-MM-dd HH:mm:ss}</td><td>{(e.Accepted ? Html.M($"<span class=\"chip ok\">accepted</span>") : Html.M($"<span class=\"chip bad\">refused</span>"))}</td><td><bdi>{e.What}</bdi></td><td><bdi>{e.Detail}</bdi></td></tr>
+                """)))}</table></div>
             """), refresh: true);
 
-    public const string Css = """
-        :root { color-scheme: light dark; --fg: #1b1f23; --bg: #fafaf8; --muted: #5d6670; --line: #d8dbde; --bad: #a3261b; --ok: #1f6d3a; }
-        @media (prefers-color-scheme: dark) { :root { --fg: #e6e8ea; --bg: #15181b; --muted: #9aa3ab; --line: #30363b; --bad: #f08a80; --ok: #7fd19a; } }
-        body { margin: 0; font: 15px/1.45 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
-        header { display: flex; gap: 1.5rem; align-items: baseline; flex-wrap: wrap; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }
-        header nav a { margin-right: 1rem; color: inherit; }
-        main { padding: 1rem; max-width: 70rem; }
-        h1 { font-size: 1.4rem; margin: .2rem 0 1rem; } h2 { font-size: 1.05rem; margin: 1.6rem 0 .5rem; }
-        table { border-collapse: collapse; } th, td { text-align: left; padding: .25rem .8rem .25rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
-        td.n { text-align: right; font-variant-numeric: tabular-nums; }
-        .note { color: var(--muted); } .warn { color: var(--bad); font-weight: 600; } .flag { color: var(--bad); font-size: .85em; } code { font-size: .9em; }
-        tr.refused td:nth-child(2) { color: var(--bad); } tr.ok td:nth-child(2) { color: var(--ok); }
-        """;
-
-    internal static string Layout(string title, Markup body, bool refresh) => Html.M($"""
-        <!doctype html>
-        <html lang="en"><head><meta charset="utf-8"><title>{title} · BS3D admin</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        {(refresh ? Html.M($"<meta http-equiv=\"refresh\" content=\"5;url=/live?auto=1\">") : default)}
-        <link rel="stylesheet" href="/style.css"></head>
-        <body><header><strong>BS3D admin</strong><nav><a href="/">Overview</a><a href="/live">Live</a><a href="/boards">Boards</a><a href="/players">Players</a></nav><span class="note">read-only · this machine only</span></header>
-        <main><h1>{title}</h1>{body}</main></body></html>
-        """).Value;
+    /// <param name="section">The tab a page belongs to when it is not one itself: a board's page is under Boards.</param>
+    internal static string Layout(string title, Markup body, bool refresh, string? section = null)
+    {
+        section ??= title;
+        Markup tabs = Html.Join(Sections.Select(s => s.Name == section
+            ? Html.M($"<a href=\"{s.Href}\" aria-current=\"page\">{s.Name}</a>")
+            : Html.M($"<a href=\"{s.Href}\">{s.Name}</a>")));
+        Markup crumb = section == title ? default
+            : Html.M($"<a class=\"crumb\" href=\"{Sections.Single(s => s.Name == section).Href}\">{section}</a>");
+        return Html.M($"""
+            <!doctype html>
+            <html lang="en"><head><meta charset="utf-8"><title>{title} · BS3D admin</title>
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            {(refresh ? Html.M($"<meta http-equiv=\"refresh\" content=\"5;url=/live?auto=1\">") : default)}
+            <link rel="stylesheet" href="/style.css"></head>
+            <body><header class="top"><div class="bar"><a class="brand" href="/"><span class="mark">BS3D</span>admin</a><nav>{tabs}</nav><span class="badge">read-only · 127.0.0.1</span></div></header>
+            <main>{crumb}<h1><bdi>{title}</bdi>{(refresh ? Html.M($"<span class=\"live\">every 5 s</span>") : default)}</h1>{body}</main>
+            <footer>BS3D.Api {ShortVersion} · read-only · this machine only</footer></body></html>
+            """).Value;
+    }
 
     internal static string Size(long bytes) => bytes switch
     {

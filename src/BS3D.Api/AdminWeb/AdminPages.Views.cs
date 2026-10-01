@@ -10,15 +10,15 @@ public static partial class AdminPages
     {
         int unknown = boards.Count(b => !b.Known);
         Markup missing = noTables == null ? default
-            : Html.M($"<p class=\"flag\">No ceiling table in {noTables} (Scores__CeilingsDirectory): only the boards with clears are listed.</p>");
+            : Html.M($"<p class=\"warn\">No ceiling table in <code>{noTables}</code> (Scores__CeilingsDirectory): only the boards with clears are listed.</p>");
         Markup rows = Html.Join(boards.Select(b => Html.M($"""
             <tr><td><a href="{BoardLink(b.Key)}">{b.Name ?? b.Key.File}</a>{(b.Known ? default : Html.M($" <span class=\"flag\">in no ceiling table</span>"))}</td>
             <td><code>{b.Key.File}#{b.Key.Hash} r{b.Key.Rules}</code></td><td class="n">{(b.Ceiling is int c ? c.ToString("N0", CultureInfo.InvariantCulture) : "")}</td>
-            <td class="n">{b.Shots}</td><td class="n">{b.MonthPlayers}</td><td class="n">{b.AllPlayers}</td><td class="n">{b.Clears}</td><td>{Stamp(b.LastClear)}</td></tr>
+            <td class="n">{b.Shots}</td><td class="n">{b.MonthPlayers}</td><td class="n">{b.AllPlayers}</td><td class="n">{b.Clears}</td><td class="t">{Stamp(b.LastClear)}</td></tr>
             """)));
         return Layout("Boards", Html.M($"""
             {missing}<p class="note">{boards.Count} boards: every board a ceiling table names{(unknown > 0 ? Html.M($", and {unknown} with clears that no table names") : default)}. Players count each visible player once; hidden players are not counted, as on the game's boards.</p>
-            <table><tr><th>Level</th><th>Board</th><th>Ceiling</th><th>Shots</th><th>Players {month}</th><th>Players all time</th><th>Clears</th><th>Last clear (UTC)</th></tr>{rows}</table>
+            <div class="panel"><table><tr><th>Level</th><th>Board</th><th class="n">Ceiling</th><th class="n">Shots</th><th class="n">Players {month}</th><th class="n">Players all time</th><th class="n">Clears</th><th>Last clear (UTC)</th></tr>{rows}</table></div>
             """), refresh: false);
     }
 
@@ -27,41 +27,43 @@ public static partial class AdminPages
         Markup Entries(IReadOnlyList<BoardEntry> entries, int total) => entries.Count == 0
             ? Html.M($"<p class=\"note\">Nobody is on this board.</p>")
             : Html.M($"""
-                <table><tr><th>Rank</th><th>Player</th><th>Score</th><th>Stars</th><th>Cleared (UTC)</th></tr>{Html.Join(entries.Select(e => Html.M($"""
-                    <tr><td class="n">{e.Rank}</td><td><bdi>{e.Name}</bdi></td><td class="n">{e.Score.ToString("N0", CultureInfo.InvariantCulture)}</td><td class="n">{e.Stars}</td><td>{Stamp(e.At)}</td></tr>
-                    """)))}</table>{(total > entries.Count ? Html.M($"<p class=\"note\">The first {entries.Count} of {total}.</p>") : default)}
+                <div class="panel"><table><tr><th class="n">Rank</th><th>Player</th><th class="n">Score</th><th class="n">Stars</th><th>Cleared (UTC)</th></tr>{Html.Join(entries.Select(e => Html.M($"""
+                    <tr><td class="n">{e.Rank}</td><td><bdi>{e.Name}</bdi></td><td class="n">{e.Score.ToString("N0", CultureInfo.InvariantCulture)}</td><td class="n">{e.Stars}</td><td class="t">{Stamp(e.At)}</td></tr>
+                    """)))}</table></div>{(total > entries.Count ? Html.M($"<p class=\"note\">The first {entries.Count} of {total}.</p>") : default)}
                 """);
 
         Markup hidden = b.Hidden.Count == 0 ? default : Html.M($"""
             <h2>Hidden players (on no board)</h2>
-            <table><tr><th>Player</th><th>Best</th><th>Stars</th><th>Clears</th></tr>{Html.Join(b.Hidden.Select(h => Html.M($"""
+            <div class="panel"><table><tr><th>Player</th><th class="n">Best</th><th class="n">Stars</th><th class="n">Clears</th></tr>{Html.Join(b.Hidden.Select(h => Html.M($"""
                 <tr><td><a href="{PlayerLink(h.Player)}"><bdi>{h.Name}</bdi></a></td><td class="n">{h.Score.ToString("N0", CultureInfo.InvariantCulture)}</td><td class="n">{h.Stars}</td><td class="n">{h.Clears}</td></tr>
-                """)))}</table>
+                """)))}</table></div>
             """);
 
         Markup ceiling = b.Ceiling is { } c
-            ? Html.M($"ceiling {c.Ceiling.ToString("N0", CultureInfo.InvariantCulture)}, {c.MinShots}–{c.Shots} shots")
+            ? Html.M($"<span class=\"note\">ceiling {c.Ceiling.ToString("N0", CultureInfo.InvariantCulture)} · {c.MinShots}–{c.Shots} shots</span>")
             : Html.M($"<span class=\"flag\">in no ceiling table</span>");
         return Layout(b.Ceiling?.Name ?? b.Key.File, Html.M($"""
-            <p><code>{b.Key.File}#{b.Key.Hash} r{b.Key.Rules}</code> · {ceiling}</p>
+            <p><code class="key">{b.Key.File}#{b.Key.Hash} r{b.Key.Rules}</code> {ceiling}</p>
             <p class="note">As the game sees it (the same query as <code>GET /v1/boards</code>): the best clear of each visible player, ties to the earlier.</p>
-            <h2>{b.Month} ({b.MonthTotal})</h2>{Entries(b.MonthEntries, b.MonthTotal)}
-            <h2>All time ({b.AllTotal})</h2>{Entries(b.AllEntries, b.AllTotal)}
+            <div class="cols">
+            <section><h2>{b.Month} ({b.MonthTotal})</h2>{Entries(b.MonthEntries, b.MonthTotal)}</section>
+            <section><h2>All time ({b.AllTotal})</h2>{Entries(b.AllEntries, b.AllTotal)}</section>
+            </div>
             {hidden}
-            """), refresh: false);
+            """), refresh: false, section: "Boards");
     }
 
     public static string Players(IReadOnlyList<AdminData.PlayerRow> players, string order)
     {
-        Markup Sort(string key, string label) => key == order ? Html.M($"{label}") : Html.M($"<a href=\"/players?sort={key}\">{label}</a>");
+        Markup Sort(string key, string label) => key == order ? Html.M($"<span class=\"sorted\">{label}</span>") : Html.M($"<a href=\"/players?sort={key}\">{label}</a>");
         Markup rows = Html.Join(players.Select(p => Html.M($"""
-            <tr><td><a href="{PlayerLink(p.Id)}"><bdi>{p.Name}</bdi></a>{Flags(p.Name)} <code class="note">{p.Id.ToString()[..8]}</code></td>
-            <td>{Stamp(p.Created)}</td><td>{(p.Hidden ? "hidden" : "")}</td><td class="n">{p.Clears}</td><td>{Stamp(p.LastClear)}</td>
+            <tr><td><a href="{PlayerLink(p.Id)}"><bdi>{p.Name}</bdi></a>{Flags(p.Name)}<code class="id">{p.Id.ToString()[..8]}</code></td>
+            <td class="t">{Stamp(p.Created)}</td><td>{(p.Hidden ? Html.M($"<span class=\"chip muted\">hidden</span>") : default)}</td><td class="n">{p.Clears}</td><td class="t">{Stamp(p.LastClear)}</td>
             <td class="n">{p.Addresses}</td><td>{Shares(p.SharesWith)}</td></tr>
             """)));
         return Layout("Players", Html.M($"""
             <p class="note">{players.Count} players. "Addresses" counts the different addresses a player's clears came from; the addresses themselves are never shown. Behind the home network every player at home shares one.</p>
-            <table><tr><th>{Sort("name", "Player")}</th><th>{Sort("created", "Created (UTC)")}</th><th>Hidden</th><th>{Sort("clears", "Clears")}</th><th>{Sort("last", "Last clear (UTC)")}</th><th>Addresses</th><th>Shares an address with</th></tr>{rows}</table>
+            <div class="panel"><table><tr><th>{Sort("name", "Player")}</th><th>{Sort("created", "Created (UTC)")}</th><th>Hidden</th><th class="n">{Sort("clears", "Clears")}</th><th>{Sort("last", "Last clear (UTC)")}</th><th class="n">Addresses</th><th>Shares an address with</th></tr>{rows}</table></div>
             """), refresh: false);
     }
 
@@ -73,23 +75,23 @@ public static partial class AdminPages
             <td>{Rank(b.Month, p.Hidden)}</td><td>{Rank(b.AllTime, p.Hidden)}</td></tr>
             """)));
         Markup clears = Html.Join(view.Clears.Select(c => Html.M($"""
-            <tr><td>{Stamp(c.At)}</td><td><code>{c.Board.File}</code></td><td class="n">{c.Score.ToString("N0", CultureInfo.InvariantCulture)}</td><td class="n">{c.Stars}</td>
+            <tr><td class="t">{Stamp(c.At)}</td><td><code>{c.Board.File}</code></td><td class="n">{c.Score.ToString("N0", CultureInfo.InvariantCulture)}</td><td class="n">{c.Stars}</td>
             <td class="n">{c.Shots}</td><td class="n">{c.Seconds.ToString("0.0", CultureInfo.InvariantCulture)} s</td><td><bdi>{c.GameVersion}</bdi></td><td><bdi>{c.UserAgent ?? ""}</bdi></td><td>{c.Address}</td></tr>
             """)));
         return Layout(p.Name, Html.M($"""
-            <table class="facts">
+            <div class="panel"><table class="facts">
             <tr><th>Player</th><td><bdi>{p.Name}</bdi>{Flags(p.Name)}</td></tr>
             <tr><th>Id</th><td><code>{p.Id}</code></td></tr>
             <tr><th>Created</th><td>{Stamp(p.Created)} UTC</td></tr>
             <tr><th>On the boards</th><td>{(p.Hidden ? Html.M($"<span class=\"flag\">hidden: on no board and in no count</span>") : Html.M($"yes"))}</td></tr>
             <tr><th>Addresses</th><td>{p.Addresses}, lettered below in the order they first appear</td></tr>
             <tr><th>Shares an address with</th><td>{Shares(p.SharesWith)}</td></tr>
-            </table>
+            </table></div>
             <h2>Boards</h2>
-            <table><tr><th>Board</th><th>Best</th><th>This month</th><th>All time</th></tr>{boards}</table>
+            <div class="panel"><table><tr><th>Board</th><th class="n">Best</th><th>This month</th><th>All time</th></tr>{boards}</table></div>
             <h2>Clears ({view.Clears.Count}), newest first</h2>
-            <table><tr><th>When (UTC)</th><th>Level</th><th>Score</th><th>Stars</th><th>Shots</th><th>Time</th><th>Game</th><th>Client</th><th>Address</th></tr>{clears}</table>
-            """), refresh: false);
+            <div class="panel"><table><tr><th>When (UTC)</th><th>Level</th><th class="n">Score</th><th class="n">Stars</th><th class="n">Shots</th><th class="n">Time</th><th>Game</th><th>Client</th><th>Address</th></tr>{clears}</table></div>
+            """), refresh: false, section: "Players");
     }
 
     /// <summary>
@@ -106,7 +108,7 @@ public static partial class AdminPages
         _ => CharUnicodeInfo.GetUnicodeCategory(letter) + ":" + ((int)letter >> 8),
     };
 
-    private static Markup Flags(string name) => MixesScripts(name) ? Html.M($" <span class=\"flag\">mixed scripts</span>") : default;
+    private static Markup Flags(string name) => MixesScripts(name) ? Html.M($"<span class=\"flag\">mixed scripts</span>") : default;
 
     private static Markup Shares(IReadOnlyList<(Guid Id, string Name)> others) => others.Count == 0 ? default
         : Html.Join(others.Select((o, i) => Html.M($"{(i > 0 ? ", " : "")}<a href=\"{PlayerLink(o.Id)}\"><bdi>{o.Name}</bdi></a>")));
