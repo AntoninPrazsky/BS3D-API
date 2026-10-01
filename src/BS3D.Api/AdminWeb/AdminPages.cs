@@ -8,7 +8,7 @@ namespace BS3D.Api.AdminWeb;
 /// request — a nickname, a game version, a refusal's detail — is encoded by <see cref="Html.M"/> and isolated in
 /// <c>&lt;bdi&gt;</c>, so a right-to-left override in a nickname cannot reorder the row around it.
 /// </summary>
-public static class AdminPages
+public static partial class AdminPages
 {
     public static readonly string Version =
         typeof(AdminPages).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "?";
@@ -68,28 +68,28 @@ public static class AdminPages
         h1 { font-size: 1.4rem; margin: .2rem 0 1rem; } h2 { font-size: 1.05rem; margin: 1.6rem 0 .5rem; }
         table { border-collapse: collapse; } th, td { text-align: left; padding: .25rem .8rem .25rem 0; border-bottom: 1px solid var(--line); vertical-align: top; }
         td.n { text-align: right; font-variant-numeric: tabular-nums; }
-        .note { color: var(--muted); } .warn { color: var(--bad); font-weight: 600; }
+        .note { color: var(--muted); } .warn { color: var(--bad); font-weight: 600; } .flag { color: var(--bad); font-size: .85em; } code { font-size: .9em; }
         tr.refused td:nth-child(2) { color: var(--bad); } tr.ok td:nth-child(2) { color: var(--ok); }
         """;
 
-    private static string Layout(string title, Markup body, bool refresh) => Html.M($"""
+    internal static string Layout(string title, Markup body, bool refresh) => Html.M($"""
         <!doctype html>
         <html lang="en"><head><meta charset="utf-8"><title>{title} · BS3D admin</title>
         <meta name="viewport" content="width=device-width, initial-scale=1">
         {(refresh ? Html.M($"<meta http-equiv=\"refresh\" content=\"5;url=/live?auto=1\">") : default)}
         <link rel="stylesheet" href="/style.css"></head>
-        <body><header><strong>BS3D admin</strong><nav><a href="/">Overview</a><a href="/live">Live</a></nav><span class="note">read-only · this machine only</span></header>
+        <body><header><strong>BS3D admin</strong><nav><a href="/">Overview</a><a href="/live">Live</a><a href="/boards">Boards</a><a href="/players">Players</a></nav><span class="note">read-only · this machine only</span></header>
         <main><h1>{title}</h1>{body}</main></body></html>
         """).Value;
 
-    private static string Size(long bytes) => bytes switch
+    internal static string Size(long bytes) => bytes switch
     {
         < 1024 => $"{bytes} B",
         < 1024 * 1024 => string.Create(CultureInfo.InvariantCulture, $"{bytes / 1024.0:0.#} KB"),
         _ => string.Create(CultureInfo.InvariantCulture, $"{bytes / 1024.0 / 1024.0:0.#} MB"),
     };
 
-    private static string Ago(TimeSpan span) => span.TotalMinutes < 1 ? "just now"
+    internal static string Ago(TimeSpan span) => span.TotalMinutes < 1 ? "just now"
         : span.TotalHours < 1 ? $"{(int)span.TotalMinutes} min ago"
         : span.TotalDays < 1 ? $"{(int)span.TotalHours} h ago"
         : $"{(int)span.TotalDays} d ago";

@@ -90,7 +90,19 @@ public sealed class AdminPage : IAsyncDisposable
         return id;
     }
 
-    public static void AddClear(ScoreStore store, SqliteConnection c, DateTimeOffset now, Guid player, int score, string ipHash = "1PHASH0000000000") =>
-        store.Insert(c, new ScoreStore.NewSubmission(Guid.NewGuid(), player, new BoardKey(Api.File, Api.Hash, Api.Rules), score, 3, 10, 60,
+    public static void AddClear(ScoreStore store, SqliteConnection c, DateTimeOffset now, Guid player, int score, string ipHash = "1PHASH0000000000",
+        BoardKey? board = null) =>
+        store.Insert(c, new ScoreStore.NewSubmission(Guid.NewGuid(), player, board ?? new BoardKey(Api.File, Api.Hash, Api.Rules), score, 3, 10, 60,
             "v0.2.1", ipHash, "BS3D/v0.2.1", now));
+
+    /// <summary>A ceiling table naming <c>One.json</c> (the board <see cref="Api"/> uses) and <c>Two.json</c>.</summary>
+    public void WriteCeilingTable()
+    {
+        Directory.CreateDirectory(Options.CeilingsDirectory);
+        File.WriteAllText(Path.Combine(Options.CeilingsDirectory, "BS3D-v9.9.9-ceilings.json"), $$"""
+            { "format": "bs3d-ceilings", "version": 1, "rulesVersion": 1, "hashLength": 16, "levels": [
+              { "file": "{{Api.File}}", "name": "One", "hash": "{{Api.Hash}}", "rulesVersion": {{Api.Rules}}, "shots": 30, "ceiling": 50000, "minShots": 3 },
+              { "file": "Two.json", "name": "Two", "hash": "fedcba9876543210", "rulesVersion": 1, "shots": 20, "ceiling": 40000, "minShots": 2 } ] }
+            """);
+    }
 }

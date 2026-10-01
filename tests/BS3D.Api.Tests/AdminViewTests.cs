@@ -1,0 +1,204 @@
+using System.Net;
+using System.Text.RegularExpressions;
+using BS3D.Api.AdminWeb;
+
+namespace BS3D.Api.Tests;
+
+/// <summary>The admin page's boards and players views (issue #5, requirement 12).</summary>
+public sealed class AdminViewTests
+{
+    private static readonly DateTimeOffset LastMonth = new(2026, 8, 20, 12, 0, 0, TimeSpan.Zero);
+    private static readonly BoardKey Unknown = new("Unknown.json", "0000000000000000", 1);
+
+    /// <summary>The names in one table of a page, in order: the text of each row's second cell.</summary>
+    private static List<string> Names(string section) =>
+        Regex.Matches(section, @"<tr><td class=""n"">\d+</td><td><bdi>([^<]*)</bdi>").Select(m => WebUtility.HtmlDecode(m.Groups[1].Value)).ToList();
+
+    /// <summary>The players list's row of <paramref name="name"/>, found by its first cell (a name also appears in other rows' "shares" cell).</summary>
+    private static string RowOf(string html, string name) =>
+        Regex.Matches(html, @"<tr><td><a href=""/player\?id=[^""]+""><bdi>(?<name>[^<]*)</bdi>.*?</tr>", RegexOptions.Singleline)
+            .Single(m => WebUtility.HtmlDecode(m.Groups["name"].Value) == name).Value;
+
+    private static string Between(string html, string from, string to)
+    {
+        int start = html.IndexOf(from, StringComparison.Ordinal);
+        int end = html.IndexOf(to, start + from.Length, StringComparison.Ordinal);
+        return html[start..(end < 0 ? html.Length : end)];
+    }
+
+    [Fact]
+    public async Task The_boards_are_every_board_a_table_names_and_any_board_with_clears_that_none_does()
+    {
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            Guid ann = AdminPage.AddPlayer(store, c, now, "Ann");
+            AdminPage.AddClear(store, c, now, ann, 100);
+            AdminPage.AddClear(store, c, now, ann, 200);
+            Guid bob = AdminPage.AddPlayer(store, c, now, "Bob");
+            AdminPage.AddClear(store, c, LastMonth, bob, 300);
+            Guid hid = AdminPage.AddPlayer(store, c, now, "Hid");
+            store.SetHidden(c, hid, true);
+            AdminPage.AddClear(store, c, now, hid, 400);
+            AdminPage.AddClear(store, c, now, ann, 50, board: Unknown);
+        });
+        page.WriteCeilingTable();
+        await page.LogInAsync();
+
+        string html = await page.Client.GetStringAsync("/boards");
+
+        // One: Ann this month; Ann and Bob all time; the hidden player in no count, though her clear is one of the 4
+        Assert.Matches(@">One</a></td>\s*<td><code>One\.json#0123456789abcdef r1</code></td><td class=""n"">50,000</td>\s*<td class=""n"">30</td><td class=""n"">1</td><td class=""n"">2</td><td class=""n"">4</td>", html);
+        Assert.Matches(@">Two</a></td>\s*<td><code>Two\.json#fedcba9876543210 r1</code></td><td class=""n"">40,000</td>\s*<td class=""n"">20</td><td class=""n"">0</td><td class=""n"">0</td><td class=""n"">0</td>", html);
+        Assert.Matches(@">Unknown\.json</a> <span class=""flag"">in no ceiling table</span>", html);
+    }
+
+    [Fact]
+    public async Task The_boards_say_so_when_no_ceiling_table_was_read()
+    {
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, "Ann"), 100));
+        await page.LogInAsync();
+
+        string without = await page.Client.GetStringAsync("/boards");
+        page.WriteCeilingTable();
+        string with = await page.Client.GetStringAsync("/boards");
+
+        Assert.Contains("No ceiling table in ", without);
+        Assert.DoesNotContain("No ceiling table", with);
+    }
+
+    [Fact]
+    public async Task A_board_ranks_as_the_game_sees_it_with_the_hidden_players_apart()
+    {
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, "Ann"), 1000);
+            AdminPage.AddClear(store, c, now.AddMinutes(1), AdminPage.AddPlayer(store, c, now, "Cid"), 1000);   // a tie: Ann was earlier
+            Guid bob = AdminPage.AddPlayer(store, c, LastMonth, "Bob");
+            AdminPage.AddClear(store, c, LastMonth, bob, 5000);                                                 // last month only
+            AdminPage.AddClear(store, c, now, bob, 10);
+            Guid hid = AdminPage.AddPlayer(store, c, now, "Hid");
+            store.SetHidden(c, hid, true);
+            AdminPage.AddClear(store, c, now, hid, 99999);
+        });
+        page.WriteCeilingTable();
+        await page.LogInAsync();
+
+        string html = await page.Client.GetStringAsync($"/board?file={Api.File}&hash={Api.Hash}&rules={Api.Rules}");
+
+        Assert.Equal(["Ann", "Cid", "Bob"], Names(Between(html, "<h2>2026-09", "<h2>All time")));
+        Assert.Equal(["Bob", "Ann", "Cid"], Names(Between(html, "<h2>All time", "<h2>Hidden")));
+        Assert.Contains("<bdi>Hid</bdi></a></td><td class=\"n\">99,999</td>", Between(html, "<h2>Hidden", "</table>"));
+        Assert.DoesNotContain("<bdi>Ann", Between(html, "<h2>Hidden", "</table>"));
+        Assert.DoesNotContain("Hid", Between(html, "<h2>2026-09", "<h2>Hidden"));
+    }
+
+    [Fact]
+    public async Task The_players_show_their_clears_addresses_and_who_shares_one_never_the_address()
+    {
+        Guid ann = Guid.Empty, bob = Guid.Empty;
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            ann = AdminPage.AddPlayer(store, c, now, "Ann");
+            AdminPage.AddClear(store, c, now, ann, 100, "ADDRESS1aaaaaaaa");
+            AdminPage.AddClear(store, c, now, ann, 200, "ADDRESS2bbbbbbbb");
+            bob = AdminPage.AddPlayer(store, c, now, "Bob");
+            AdminPage.AddClear(store, c, now, bob, 300, "ADDRESS1aaaaaaaa");
+            AdminPage.AddPlayer(store, c, now, "Cid");
+        });
+        await page.LogInAsync();
+
+        string html = await page.Client.GetStringAsync("/players");
+
+        string annRow = RowOf(html, "Ann"), bobRow = RowOf(html, "Bob"), cidRow = RowOf(html, "Cid");
+        Assert.Equal(2, Regex.Matches(annRow, @"<td class=""n"">2</td>").Count);         // two clears, two addresses
+        Assert.EndsWith($"<a href=\"/player?id={bob}\"><bdi>Bob</bdi></a></td></tr>", annRow);
+        Assert.EndsWith($"<a href=\"/player?id={ann}\"><bdi>Ann</bdi></a></td></tr>", bobRow);
+        Assert.EndsWith("<td></td></tr>", cidRow);
+        Assert.Single(Regex.Matches(annRow, $"/player\\?id={ann}"));                   // her own name, not among those she shares with
+        Assert.DoesNotContain("ADDRESS", html);
+    }
+
+    [Fact]
+    public async Task A_player_letters_their_addresses_and_shows_where_they_stand()
+    {
+        Guid ann = Guid.Empty, hid = Guid.Empty;
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            ann = AdminPage.AddPlayer(store, c, now, "Ann");
+            AdminPage.AddClear(store, c, now, ann, 100, "ADDRESS1aaaaaaaa");
+            AdminPage.AddClear(store, c, now.AddMinutes(1), ann, 200, "ADDRESS2bbbbbbbb");
+            AdminPage.AddClear(store, c, now.AddMinutes(2), ann, 150, "ADDRESS1aaaaaaaa");
+            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, "Bob"), 500);
+            hid = AdminPage.AddPlayer(store, c, now, "Hid");
+            store.SetHidden(c, hid, true);
+            AdminPage.AddClear(store, c, now, hid, 900);
+        });
+        await page.LogInAsync();
+
+        string html = await page.Client.GetStringAsync($"/player?id={ann}");
+
+        // Newest first: the third clear came from the first address again
+        Assert.Equal(["A", "B", "A"], Regex.Matches(Between(html, "<h2>Clears", "</table>"), @"<td>([A-Z])</td></tr>").Select(m => m.Groups[1].Value).Reverse().ToList());
+        Assert.Contains("<td>#2 of 2</td><td>#2 of 2</td>", html);
+        Assert.DoesNotContain("ADDRESS", html);
+        Assert.Contains("<td>hidden</td><td>hidden</td>", await page.Client.GetStringAsync($"/player?id={hid}"));
+    }
+
+    [Fact]
+    public async Task A_name_mixing_scripts_is_flagged()
+    {
+        const string lookalike = "K\u0430rel";   // the second letter is Cyrillic
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            AdminPage.AddPlayer(store, c, now, "Karel");
+            AdminPage.AddPlayer(store, c, now, lookalike);
+            AdminPage.AddPlayer(store, c, now, "Žluťoučký kůň");
+        });
+        await page.LogInAsync();
+
+        string html = await page.Client.GetStringAsync("/players");
+
+        Assert.Single(Regex.Matches(html, "mixed scripts"));
+        Assert.Contains("mixed scripts", RowOf(html, lookalike));
+        Assert.True(AdminPages.MixesScripts(lookalike));
+        Assert.False(AdminPages.MixesScripts("Karel"));
+        Assert.False(AdminPages.MixesScripts("Žluťoučký kůň"));
+    }
+
+    [Fact]
+    public async Task A_sort_key_comes_from_a_fixed_set_and_nothing_else_reaches_the_query()
+    {
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, "Ann"), 100);
+            Guid zed = AdminPage.AddPlayer(store, c, now, "Zed");
+            AdminPage.AddClear(store, c, now, zed, 100);
+            AdminPage.AddClear(store, c, now, zed, 200);
+        });
+        await page.LogInAsync();
+
+        string byClears = await page.Client.GetStringAsync("/players?sort=clears");
+        HttpResponseMessage injected = await page.Client.GetAsync("/players?sort=" + Uri.EscapeDataString("name; DROP TABLE players"));
+
+        Assert.True(byClears.IndexOf("<bdi>Zed", StringComparison.Ordinal) < byClears.IndexOf("<bdi>Ann", StringComparison.Ordinal));
+        Assert.Equal(HttpStatusCode.OK, injected.StatusCode);
+        string byName = await injected.Content.ReadAsStringAsync();
+        Assert.True(byName.IndexOf("<bdi>Ann", StringComparison.Ordinal) < byName.IndexOf("<bdi>Zed", StringComparison.Ordinal));
+        Assert.Equal(2, page.Store.Export(page.Store.Open()).Select(r => r["player_id"]).Distinct().Count());
+    }
+
+    [Theory]
+    [InlineData("/player?id=not-a-guid")]
+    [InlineData("/player?id=00000000-0000-0000-0000-000000000001")]
+    [InlineData("/board?file=Nowhere.json&hash=0000000000000000&rules=1")]
+    [InlineData("/board?file=One.json")]
+    public async Task What_is_not_there_is_not_found(string path)
+    {
+        await using AdminPage page = await AdminPage.StartAsync();
+        page.WriteCeilingTable();
+        await page.LogInAsync();
+
+        Assert.Equal(HttpStatusCode.NotFound, (await page.Client.GetAsync(path)).StatusCode);
+    }
+}

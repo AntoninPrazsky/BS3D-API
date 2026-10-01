@@ -111,6 +111,23 @@ public static class AdminWebApp
         });
         app.MapGet("/", (AdminData data) => Results.Content(AdminPages.Overview(data.ReadOverview(), options.Clock.GetUtcNow()), "text/html; charset=utf-8"));
         app.MapGet("/live", (AdminData data) => Results.Content(AdminPages.Live(data.ReadLive(100)), "text/html; charset=utf-8"));
+        app.MapGet("/boards", (AdminData data) =>
+        {
+            Ceilings ceilings = data.LoadCeilings();
+            return Page(AdminPages.Boards(data.ReadBoards(ceilings), ScoreStore.MonthOf(options.Clock.GetUtcNow()),
+                ceilings.Count == 0 ? Path.GetFullPath(options.CeilingsDirectory) : null));
+        });
+        app.MapGet("/board", (AdminData data, string? file, string? hash, int? rules) =>
+            file is { Length: > 0 } && hash is { Length: > 0 } && rules is int r && data.ReadBoard(new BoardKey(file, hash, r), data.LoadCeilings()) is { } board
+                ? Page(AdminPages.Board(board))
+                : Results.NotFound());
+        app.MapGet("/players", (AdminData data, string? sort) =>
+        {
+            string order = sort is not null && AdminData.PlayerOrders.ContainsKey(sort) ? sort : "name";
+            return Page(AdminPages.Players(data.ReadPlayers(order), order));
+        });
+        app.MapGet("/player", (AdminData data, string? id) =>
+            Guid.TryParse(id, out Guid player) && data.ReadPlayer(player) is { } view ? Page(AdminPages.Player(view)) : Results.NotFound());
         app.MapGet("/style.css", () => Results.Content(AdminPages.Css, "text/css; charset=utf-8"));
         return app;
     }
@@ -181,6 +198,8 @@ public static class AdminWebApp
             app.Lifetime.StopApplication();
         }
     }
+
+    private static IResult Page(string html) => Results.Content(html, "text/html; charset=utf-8");
 
     private static bool IsOwnHost(HostString host, int port) =>
         host.Port == port && host.Host is { } name
