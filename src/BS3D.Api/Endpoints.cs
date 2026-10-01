@@ -44,7 +44,7 @@ public static partial class Endpoints
         if (token == null) return Refuse(log, http, 401, Reasons.NoToken, body.PlayerId.ToString());
 
         if (!limits.TryTake("address:" + AddressHasher.AddressOf(http), o.SubmissionsPerMinutePerAddress, out TimeSpan wait))
-            return RateLimited(log, http, wait);
+            return RateLimited(log, http, wait, "address " + addresses.Hash(http));
 
         using SqliteConnection c = store.Open();
 
@@ -57,7 +57,7 @@ public static partial class Endpoints
             return Refuse(log, http, 401, Reasons.WrongToken, body.PlayerId.ToString());
 
         if (!limits.TryTake("player:" + body.PlayerId, o.SubmissionsPerMinutePerPlayer, out wait))
-            return RateLimited(log, http, wait);
+            return RateLimited(log, http, wait, "player " + body.PlayerId);
 
         string? name = Nicknames.Normalize(body.Name, o.DeniedNames);
         if (name == null) return Refuse(log, http, 422, Reasons.BadName, body.Name ?? "(none)");
@@ -213,10 +213,15 @@ public static partial class Endpoints
         return null;
     }
 
-    private static IResult RateLimited(ILogger log, HttpContext http, TimeSpan wait)
+    /// <summary>
+    /// A 429 with its wait. The log line names the address by its salted hash, the same one the audit column keeps, and
+    /// never the address itself: behind the tunnel that is the player's own IP, and the journal is no register of
+    /// addresses either (issue #2).
+    /// </summary>
+    private static IResult RateLimited(ILogger log, HttpContext http, TimeSpan wait, string who)
     {
         http.Response.Headers.RetryAfter = ((int)Math.Ceiling(Math.Max(wait.TotalSeconds, 1))).ToString(CultureInfo.InvariantCulture);
-        return Refuse(log, http, 429, Reasons.RateLimited, AddressHasher.AddressOf(http));
+        return Refuse(log, http, 429, Reasons.RateLimited, who);
     }
 
     private static IResult Refuse(ILogger log, HttpContext http, int status, string reason, string detail)

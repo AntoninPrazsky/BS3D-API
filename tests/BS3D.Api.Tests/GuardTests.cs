@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.AspNetCore.Http;
 
 namespace BS3D.Api.Tests;
 
@@ -91,6 +92,39 @@ public sealed class GuardTests
 
         api.Clock.Advance(TimeSpan.FromSeconds(61));
         await api.Accepted(player, Api.Clear(player.Id, 130));
+    }
+
+    [Fact]
+    public async Task A_rate_limited_address_is_logged_by_its_salted_hash_never_as_the_address()
+    {
+        IPAddress client = IPAddress.Parse("203.0.113.77");
+        using Api api = new(new() { ["Scores:SubmissionsPerMinutePerAddress"] = "1" }) { ClientAddress = client };
+        var first = Api.NewPlayer();
+        var second = Api.NewPlayer();
+
+        await api.Accepted(first, Api.Clear(first.Id, 100));
+        HttpResponseMessage limited = await api.Post(second, Api.Clear(second.Id, 100));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        string line = Assert.Single(api.Log.Lines, l => l.Contains(Reasons.RateLimited));
+        Assert.Contains(new AddressHasher("test-salt").Hash(new DefaultHttpContext { Connection = { RemoteIpAddress = client } }), line);
+        Assert.DoesNotContain(api.Log.Lines, l => l.Contains(client.ToString()));
+    }
+
+    [Fact]
+    public async Task A_rate_limited_player_is_logged_by_their_id_never_with_the_address()
+    {
+        IPAddress client = IPAddress.Parse("203.0.113.78");
+        using Api api = new(new() { ["Scores:SubmissionsPerMinutePerPlayer"] = "1" }) { ClientAddress = client };
+        var player = Api.NewPlayer();
+
+        await api.Accepted(player, Api.Clear(player.Id, 100));
+        HttpResponseMessage limited = await api.Post(player, Api.Clear(player.Id, 110));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
+        string line = Assert.Single(api.Log.Lines, l => l.Contains(Reasons.RateLimited));
+        Assert.Contains(player.Id.ToString(), line);
+        Assert.DoesNotContain(api.Log.Lines, l => l.Contains(client.ToString()));
     }
 
     [Fact]

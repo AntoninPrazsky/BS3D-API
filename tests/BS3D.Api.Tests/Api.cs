@@ -1,10 +1,13 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 
 namespace BS3D.Api.Tests;
@@ -27,6 +30,12 @@ public sealed class Api : WebApplicationFactory<Program>
 
     /// <summary>September 2026, the middle of it — far enough from both month ends for a test to step across one.</summary>
     public FakeTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 9, 15, 12, 0, 0, TimeSpan.Zero));
+
+    /// <summary>The address every request seems to come from. The test server leaves it unset, as no proxy is trusted.</summary>
+    public IPAddress? ClientAddress { get; init; }
+
+    /// <summary>Every line the service logs.</summary>
+    public LogCapture Log { get; } = new();
 
     public Api(Dictionary<string, string?>? settings = null)
     {
@@ -52,7 +61,26 @@ public sealed class Api : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Testing");
         foreach (var (key, value) in _settings) builder.UseSetting(key, value);
-        builder.ConfigureServices(services => services.Replace(ServiceDescriptor.Singleton<TimeProvider>(Clock)));
+        builder.ConfigureLogging(logging => logging.AddProvider(Log));
+        builder.ConfigureServices(services =>
+        {
+            services.Replace(ServiceDescriptor.Singleton<TimeProvider>(Clock));
+            services.AddTransient<IStartupFilter>(_ => new ClientAddressFilter(this));
+        });
+    }
+
+    /// <summary>Puts <see cref="ClientAddress"/> on every request before the service's own middleware sees it.</summary>
+    private sealed class ClientAddressFilter(Api api) : IStartupFilter
+    {
+        public Action<IApplicationBuilder> Configure(Action<IApplicationBuilder> next) => app =>
+        {
+            app.Use((context, rest) =>
+            {
+                if (api.ClientAddress != null) context.Connection.RemoteIpAddress = api.ClientAddress;
+                return rest(context);
+            });
+            next(app);
+        };
     }
 
     protected override void Dispose(bool disposing)
