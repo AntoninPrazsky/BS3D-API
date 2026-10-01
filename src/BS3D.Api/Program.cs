@@ -6,7 +6,14 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
 
 bool admin = args.Length > 0 && args[0] == "admin";
-WebApplicationBuilder builder = WebApplication.CreateBuilder(admin ? [] : args);
+// The content root is the service's own folder, not the working directory (issue #3): systemd starts it in
+// /var/lib/bs3d-api and the admin CLI runs wherever its caller stands, and appsettings.json — with the log levels that
+// keep every request out of the journal — lies beside the binary
+WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = admin ? [] : args,
+    ContentRootPath = AppContext.BaseDirectory,
+});
 
 builder.Services.Configure<ScoresOptions>(builder.Configuration.GetSection(ScoresOptions.Section));
 builder.Services.AddSingleton(TimeProvider.System);
