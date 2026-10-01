@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Net;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -161,6 +162,13 @@ public static class AdminWebApp
             output.WriteLine($"No database at {Path.GetFullPath(scores.Database)} (Scores__Database).");
             return 1;
         }
+        // Kestrel would say the same in a stack trace
+        if (PortTaken(port))
+        {
+            output.WriteLine($"127.0.0.1:{port} is already in use, most likely by another admin page: one runs per port. " +
+                $"Close it, or start this one with --port {(port < 65535 ? port + 1 : port - 1)}.");
+            return 1;
+        }
         AdminWebOptions options = new()
         {
             Database = scores.Database,
@@ -204,6 +212,21 @@ public static class AdminWebApp
     private static bool IsOwnHost(HostString host, int port) =>
         host.Port == port && host.Host is { } name
         && (name.Equals("127.0.0.1", StringComparison.Ordinal) || name.Equals("localhost", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Whether something holds 127.0.0.1:<paramref name="port"/>: Linux refuses a bind where a socket listens, whatever SO_REUSEADDR says.</summary>
+    private static bool PortTaken(int port)
+    {
+        using Socket probe = new(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        try
+        {
+            probe.Bind(new IPEndPoint(IPAddress.Loopback, port));
+            return false;
+        }
+        catch (SocketException e) when (e.SocketErrorCode == SocketError.AddressAlreadyInUse)
+        {
+            return true;
+        }
+    }
 
     /// <summary>The first interface on which Linux routes packets for 127.0.0.0/8 from outside, or null.</summary>
     private static string? RouteLocalnet()

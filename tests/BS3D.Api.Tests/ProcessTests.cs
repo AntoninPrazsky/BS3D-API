@@ -153,6 +153,43 @@ public sealed class ProcessTests
         Assert.Contains("The admin page has stopped.", text);
     }
 
+    /// <summary>A second page on the same port, as when one is still open on the Pi and another is started over ssh.</summary>
+    [Fact]
+    public async Task The_admin_page_says_so_when_its_port_is_taken()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "bs3d-api-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        new ScoreStore(Path.Combine(folder, "scores.db")).EnsureSchema();
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        using TcpListener taken = new(IPAddress.Loopback, 0);
+        taken.Start();
+        int port = ((IPEndPoint)taken.LocalEndpoint).Port;
+
+        ProcessStartInfo start = new("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
+        foreach (string arg in new[] { Path.Combine(AppContext.BaseDirectory, "BS3D.Api.dll"), "admin", "web", "--port", port.ToString() })
+            start.ArgumentList.Add(arg);
+        start.Environment["Scores__Database"] = Path.Combine(folder, "scores.db");
+
+        using Process process = Process.Start(start)!;
+        Task<string> output = process.StandardOutput.ReadToEndAsync(), error = process.StandardError.ReadToEndAsync();
+        try
+        {
+            using CancellationTokenSource exit = new(TimeSpan.FromSeconds(30));
+            await process.WaitForExitAsync(exit.Token);
+        }
+        finally
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            Directory.Delete(folder, recursive: true);
+        }
+
+        string text = await output + await error;
+        Assert.Equal(1, process.ExitCode);
+        Assert.Contains($"127.0.0.1:{port} is already in use", text);
+        Assert.DoesNotContain("Exception", text);
+    }
+
     private static async Task<bool> Connects(IPAddress address, int port)
     {
         using TcpClient tcp = new();
