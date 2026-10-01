@@ -4,8 +4,14 @@
 # and ask GET /v1/health — flipping back to the previous version if it does not answer. The service applies its own
 # schema at start, so an update is exactly this. Rows are counted before and after: an update must lose none.
 #
+# The release's systemd units are put in place with it (since v0.1.9, #5), and the ones they replace are put back on a
+# rollback. The update that brings this runs the old script, which leaves the units alone: run it once more for the
+# same version.
+#
 #   sudo /opt/bs3d-api/current/deploy/update.sh v0.2.0      a given release
 #   sudo /opt/bs3d-api/current/deploy/update.sh latest      the newest
+#
+# API_ROOT, API_DATABASE, UNIT_DIR and HEALTH_SECONDS exist for tests/deploy/update.test.sh.
 set -euo pipefail
 
 # The row counts run the service's binary as bs3d-api, the one before the update included. v0.1.0 took the working
@@ -13,7 +19,11 @@ set -euo pipefail
 cd /
 
 REPO=${API_REPO:-AntoninPrazsky/BS3D-API}
-ROOT=/opt/bs3d-api
+ROOT=${API_ROOT:-/opt/bs3d-api}
+DATABASE=${API_DATABASE:-/var/lib/bs3d-api/scores.db}
+UNIT_DIR=${UNIT_DIR:-/etc/systemd/system}
+HEALTH_SECONDS=${HEALTH_SECONDS:-30}
+UNITS=(bs3d-api.service bs3d-api-backup.service bs3d-api-backup.timer)
 version=${1:?usage: update.sh <vX.Y.Z | latest>}
 
 if [[ "$version" == latest ]]; then
@@ -39,30 +49,55 @@ foreign=$(find "$ROOT/$version" \( ! -user root -o ! -group root -o \( ! -type l
 chmod +x "$ROOT/$version/BS3D.Api" "$ROOT/$version"/deploy/*.sh
 
 count() {
-    if [[ -x "$ROOT/current/BS3D.Api" && -f /var/lib/bs3d-api/scores.db ]]; then
-        sudo -u bs3d-api env ASPNETCORE_ENVIRONMENT=Production Scores__Database=/var/lib/bs3d-api/scores.db \
+    if [[ -x "$ROOT/current/BS3D.Api" && -f "$DATABASE" ]]; then
+        sudo -u bs3d-api env ASPNETCORE_ENVIRONMENT=Production Scores__Database="$DATABASE" \
             Scores__AddressSalt=count "$ROOT/current/BS3D.Api" admin count
     else
         echo "no database yet"
     fi
 }
 
+# A unit that changed is reloaded before the restart that should use it; the timer is re-armed only if it runs
+reload_units() {
+    (( $# > 0 )) || return 0
+    systemctl daemon-reload
+    if [[ " $* " == *" bs3d-api-backup.timer "* ]]; then systemctl try-restart bs3d-api-backup.timer; fi
+}
+
 before=$(count)
 previous=$(readlink -f "$ROOT/current" 2>/dev/null || true)
+
+# The release's units, each kept aside first for a rollback. One whose mode is not 0644 is put back too: install.sh up to
+# v0.1.8 left them 0600, which systemd reads, but no one else can
+mkdir -p "$work/units"
+changed=()
+for unit in "${UNITS[@]}"; do
+    if [[ -f "$UNIT_DIR/$unit" ]]; then cp -p "$UNIT_DIR/$unit" "$work/units/$unit"; fi
+    if ! cmp -s "$ROOT/$version/deploy/$unit" "$UNIT_DIR/$unit" || [[ "$(stat -c %a "$UNIT_DIR/$unit")" != 644 ]]; then
+        install -m 0644 -o root -g root "$ROOT/$version/deploy/$unit" "$UNIT_DIR/$unit"
+        changed+=("$unit")
+    fi
+done
+reload_units "${changed[@]}"
+if (( ${#changed[@]} > 0 )); then echo "installed ${changed[*]} from $version"; fi
 
 ln -sfn "$ROOT/$version" "$ROOT/current"
 systemctl restart bs3d-api
 
 healthy=false
-for _ in $(seq 1 30); do
+for _ in $(seq 1 "$HEALTH_SECONDS"); do
     if curl -fsS http://127.0.0.1:5000/v1/health > /dev/null 2>&1; then healthy=true; break; fi
     sleep 1
 done
 
 if ! $healthy; then
-    echo "bs3d-api $version did not answer /v1/health within 30 s" >&2
+    echo "bs3d-api $version did not answer /v1/health within $HEALTH_SECONDS s" >&2
     if [[ -n "$previous" && -d "$previous" ]]; then
         ln -sfn "$previous" "$ROOT/current"
+        for unit in "${changed[@]}"; do
+            if [[ -f "$work/units/$unit" ]]; then cp -p "$work/units/$unit" "$UNIT_DIR/$unit"; else rm -f "$UNIT_DIR/$unit"; fi
+        done
+        reload_units "${changed[@]}"
         systemctl restart bs3d-api
         echo "rolled back to $(basename "$previous")" >&2
     fi

@@ -1,4 +1,4 @@
-# The score service (issue #3). Installed by deploy/install.sh to /etc/systemd/system.
+# The score service (issue #3). Installed to /etc/systemd/system by deploy/update.sh, from the release it belongs to.
 # It listens on loopback only: the internet reaches it through cloudflared (issue #2), the LAN not at all.
 [Unit]
 Description=BS3D score service
@@ -26,6 +26,13 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 ReadWritePaths=/var/lib/bs3d-api
+
+# Apart from the admin page (#5), which runs as bs3d-api too, on a kernel without Yama. In a PID namespace of its own
+# (the service is its PID 1 and starts nothing) it can neither see, signal nor ptrace the page. sudo gives the page a
+# pseudo-terminal that belongs to bs3d-api: with /dev/pts out of reach the service cannot open it and write to the
+# owner's terminal
+PrivatePIDs=yes
+InaccessiblePaths=/dev/pts
 
 [Install]
 WantedBy=multi-user.target
