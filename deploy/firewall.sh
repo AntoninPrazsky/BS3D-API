@@ -29,8 +29,11 @@ disarm() { systemctl stop "$UNDO.timer" "$UNDO.service" > /dev/null 2>&1 || true
 case "${1:-}" in
     "") ;;
     --confirm)
-        # Only rules this script loaded are kept: a confirm after the undo already ran would enable an empty policy
-        if ! nft list chain inet filter input 2> /dev/null | grep -q "policy drop"; then
+        # Only rules this script loaded are kept: a confirm after the undo already ran would enable an empty policy.
+        # Read whole before matching: piped into grep -q, nft writes on after grep has gone, dies of SIGPIPE, and
+        # pipefail made loaded rules look absent (v0.1.16, on the Pi, 2026-10-02)
+        listed=$(nft list chain inet filter input 2> /dev/null || true)
+        if [[ $listed != *"policy drop"* ]]; then
             echo "The rules are not loaded (the undo may have run already). Run it without --confirm first." >&2
             exit 1
         fi

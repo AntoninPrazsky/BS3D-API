@@ -37,7 +37,11 @@ if [ "$1" = "-c" ]; then
     exec unshare -n "$REAL_NFT" "$@"
 fi
 echo "nft $*" >> "$STUB_LOG"
-if [ "$*" = "list chain inet filter input" ] && [ -n "$STUB_LOADED" ]; then echo "    type filter hook input priority filter; policy drop;"; fi
+# Listed the way the real nft writes it, in pieces: a reader that stops at "policy drop" leaves it writing into a closed pipe
+if [ "$*" = "list chain inet filter input" ] && [ -n "$STUB_LOADED" ]; then
+    echo "table inet filter {"; echo "	chain input {"; echo "		type filter hook input priority filter; policy drop;"
+    sleep 0.2; echo "		iif \"lo\" accept"; echo "	}"; echo "}"
+fi
 EOF
 # shellcheck disable=SC2016  # the stand-ins expand $* and $STUB_LOG when they run, not here
 for tool in systemctl systemd-run; do printf '#!/bin/sh\necho "%s $*" >> "$STUB_LOG"\n' "$tool" > "$work/bin/$tool"; done

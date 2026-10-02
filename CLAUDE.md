@@ -33,7 +33,7 @@ One ASP.NET Core minimal API, one SQLite file, no ORM.
 - from the home network port 22 is open and 8080 is dropped;
 - from addresses outside its prefixes, 22 is dropped too, over IPv4 and IPv6.
 
-Each of these failed it: the rules loaded straight away with no warm-up (the 2026-10-02 outage, every flow cut), the warm-up after the rules, SSH open to any source, and no ICMP (IPv6 gone with neighbour discovery).
+Each of these failed it: the rules loaded straight away with no warm-up (the 2026-10-02 outage, every flow cut), the warm-up after the rules, SSH open to any source, and no ICMP (IPv6 gone with neighbour discovery). The lab also runs `--confirm` against the real nft five times. In v0.1.16 the check read nft's listing through `grep -q` under `pipefail`: grep stopped at the match, nft died of SIGPIPE writing the rest, and loaded rules looked absent (on the Pi, and 0 times of 5 in the lab). The check now reads the whole listing first. The nft stand-in writes its listing in pieces, as nft does, so the unit test fails on that too.
 
 ## Build, test, run
 
