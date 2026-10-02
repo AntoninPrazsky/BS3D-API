@@ -12,11 +12,12 @@
 # The home network is read when it runs, from the interface the default route leaves by: its IPv4 prefix, IPv6
 # link-local and its IPv6 prefixes. Run it again after the home network's prefixes change.
 #
-# NFT_CONF and UNDO_SECONDS exist for tests/deploy/firewall.test.sh.
+# NFT_CONF, UNDO_SECONDS and WARMUP_SECONDS exist for tests/deploy/firewall.test.sh.
 set -euo pipefail
 
 CONF=${NFT_CONF:-/etc/nftables.conf}
 UNDO_SECONDS=${UNDO_SECONDS:-180}
+WARMUP_SECONDS=${WARMUP_SECONDS:-5}
 UNDO=bs3d-firewall-undo
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
@@ -75,6 +76,17 @@ install -m 0644 -o root -g root "$work/nftables.conf" "$CONF"
 # The undo first, so a rule that cuts this very login off is gone again within minutes
 disarm
 systemd-run --quiet --on-active="${UNDO_SECONDS}s" --unit="$UNDO" "$(command -v nft)" flush ruleset
+
+# Connections already open (the tunnel's, Claude Code's, this very login) are unknown to conntrack until it sees them.
+# Loaded straight away, the rules dropped them: on 2026-10-02 the tunnel lost every connection for 7 minutes, and in a
+# lab a TCP connection stayed dead even when this end spoke on it. So conntrack first watches for WARMUP_SECONDS while
+# nothing is dropped, and the rules then replace that in one transaction, finding those connections established.
+printf '%s\n' 'flush ruleset' 'table inet bs3d_warmup {' \
+    '	chain input { type filter hook input priority filter; policy accept; ct state established,related accept; }' \
+    '	chain output { type filter hook output priority filter; policy accept; ct state established,related accept; }' \
+    '}' > "$work/warmup.nft"
+nft -f "$work/warmup.nft"
+sleep "$WARMUP_SECONDS"
 nft -f "$CONF"
 
 echo "Loaded. They are flushed again at $(date -d "+${UNDO_SECONDS} seconds" '+%H:%M:%S') unless you confirm:"
