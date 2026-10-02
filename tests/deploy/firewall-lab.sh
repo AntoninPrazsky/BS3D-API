@@ -51,6 +51,12 @@ if PATH="$stubs:$PATH" NFT_CONF="$work/nftables.conf" WARMUP_SECONDS=${WARMUP_SE
 else
     echo "FAIL  firewall.sh in the namespace: $(cat "$work/firewall.out")"
 fi
+# --confirm against the real nft, five times: its check once looked at a listing nft was still writing
+confirmed=0
+for _ in 1 2 3 4 5; do
+    if PATH="$stubs:$PATH" bash "$repo/deploy/firewall.sh" --confirm > /dev/null 2>&1; then confirmed=$((confirmed + 1)); fi
+done
+if (( confirmed == 5 )); then echo "ok    --confirm sees the loaded rules, 5 times of 5"; else echo "FAIL  --confirm saw the loaded rules $confirmed times of 5"; fi
 touch "$work/phase.loaded"
 # Neighbour caches emptied, so that what follows needs IPv6 neighbour discovery through the rules (ARP is not IP)
 ip neigh flush all
