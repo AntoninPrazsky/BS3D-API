@@ -11,7 +11,7 @@ public sealed partial class AdminData(AdminWebOptions options)
 {
     public sealed record Overview(
         long SchemaVersion, int Players, int HiddenPlayers, int Submissions, int Unfinished, int HiddenSubmissions,
-        long DatabaseBytes, Backup? NewestBackup, IReadOnlyList<Day> Days, IReadOnlyList<RefusalDay> Refusals);
+        long DatabaseBytes, Backup? NewestBackup, OffBox? LastOffBox, IReadOnlyList<Day> Days, IReadOnlyList<RefusalDay> Refusals);
 
     /// <summary>One UTC day: the clears and unfinished attempts (0 stars, #8) accepted, and the players new that day.</summary>
     public sealed record Day(string Date, int Clears, int Unfinished, int NewPlayers);
@@ -19,6 +19,13 @@ public sealed partial class AdminData(AdminWebOptions options)
     public sealed record RefusalDay(string Date, string Reason, int Count);
 
     public sealed record Backup(string Name, long Bytes, DateTimeOffset Written);
+
+    /// <summary>
+    /// What <c>deploy/backup.sh</c> recorded in <c>backups/last-offbox</c> about the copy off the box (#6): the last
+    /// attempt and its result (<c>ok</c>, <c>failed</c> or <c>none</c>, no target set up), why, and the last good copy
+    /// and its time, which a failed run keeps.
+    /// </summary>
+    public sealed record OffBox(DateTimeOffset? Attempt, string Result, string Detail, DateTimeOffset? Ok, string? Copy);
 
     /// <summary>One line of the live view: an accepted submission (a clear or an unfinished attempt) or a refusal.</summary>
     public sealed record Event(DateTimeOffset At, bool Accepted, string What, string Detail);
@@ -67,6 +74,7 @@ public sealed partial class AdminData(AdminWebOptions options)
             (int)Scalar(c, "SELECT COUNT(*) FROM submissions s JOIN players p ON p.id = s.player_id WHERE p.hidden = 1"),
             FileBytes(options.Database) + FileBytes(options.Database + "-wal"),
             NewestBackup(),
+            LastOffBox(),
             days.OrderByDescending(d => d.Key).Select(d => new Day(d.Key, d.Value.Clears, d.Value.Unfinished, d.Value.Players)).ToList(),
             refusals);
     }
@@ -99,9 +107,11 @@ public sealed partial class AdminData(AdminWebOptions options)
     private static string Shown(string detail) =>
         detail.StartsWith("address ", StringComparison.Ordinal) ? "an address (its hash is not shown)" : detail;
 
+    private string BackupFolder => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.Database))!, "backups");
+
     private Backup? NewestBackup()
     {
-        string folder = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.Database))!, "backups");
+        string folder = BackupFolder;
         try
         {
             FileInfo? newest = new DirectoryInfo(folder).EnumerateFiles("scores-*.db").MaxBy(f => f.LastWriteTimeUtc);
@@ -111,6 +121,28 @@ public sealed partial class AdminData(AdminWebOptions options)
         {
             return null;
         }
+    }
+
+    /// <summary><c>last-offbox</c> read as its <c>key=value</c> lines; null when there is none or it cannot be read.</summary>
+    private OffBox? LastOffBox()
+    {
+        Dictionary<string, string> fields;
+        try
+        {
+            fields = File.ReadLines(Path.Combine(BackupFolder, "last-offbox")).Take(20)
+                .Select(line => line.Split('=', 2)).Where(kv => kv.Length == 2)
+                .GroupBy(kv => kv[0]).ToDictionary(g => g.Key, g => g.First()[1]);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        static DateTimeOffset? When(string? stamp) =>
+            DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTimeOffset at) ? at : null;
+        return new OffBox(When(fields.GetValueOrDefault("attempt")), fields.GetValueOrDefault("result") ?? "unknown",
+            fields.GetValueOrDefault("detail") ?? "", When(fields.GetValueOrDefault("ok")),
+            fields.GetValueOrDefault("copy") is { Length: > 0 } copy ? copy : null);
     }
 
     private static long FileBytes(string path) => File.Exists(path) ? new FileInfo(path).Length : 0;

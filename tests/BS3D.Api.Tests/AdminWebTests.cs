@@ -146,6 +146,36 @@ public sealed class AdminWebTests
         Assert.Equal(HttpStatusCode.Forbidden, (await page.Client.GetAsync($"/login?key={key}")).StatusCode);
     }
 
+    /// <summary>
+    /// The off-box copy (#6) as deploy/backup.sh records it in backups/last-offbox, read on the overview at 2026-09-15 12:00:
+    /// its stat, and a warning when none is set up, the last one failed, or the newest good one is over two days old.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "<strong>no record</strong>", null)]
+    [InlineData("attempt=2026-09-15T03:31:00Z\nresult=none\ndetail=no target\nok=\ncopy=\n", "<strong>none</strong><small>not set up", "Every backup is on this Pi's own disk")]
+    [InlineData("attempt=2026-09-15T03:31:00Z\nresult=ok\ndetail=copied\nok=2026-09-15T03:31:00Z\ncopy=scores-20260915-033100.db\n", "<strong>8 h ago</strong><small>scores-20260915-033100.db</small>", null)]
+    [InlineData("attempt=2026-09-12T03:31:00Z\nresult=ok\ndetail=copied\nok=2026-09-12T03:31:00Z\ncopy=scores-20260912-033100.db\n", "<strong>3 d ago</strong>", "The newest copy off the box is from 3 d ago")]
+    [InlineData("attempt=2026-09-15T03:31:00Z\nresult=failed\ndetail=no drive is mounted at /mnt/bs3d-backup\nok=2026-09-14T03:31:00Z\ncopy=scores-20260914-033100.db\n",
+        "<strong>failed</strong><small>8 h ago: no drive is mounted at /mnt/bs3d-backup</small>", "The last copy off the box failed 8 h ago: no drive is mounted at /mnt/bs3d-backup. The newest good copy is from 1 d ago.")]
+    [InlineData("attempt=2026-09-15T03:31:00Z\nresult=failed\ndetail=<b>rsync</b> failed\nok=\ncopy=\n", "<small>8 h ago: &lt;b&gt;rsync&lt;/b&gt; failed</small>", "There is no good copy yet.")]
+    public async Task The_overview_shows_the_copy_off_the_box_and_warns_when_there_is_none(string? record, string stat, string? warning)
+    {
+        await using AdminPage page = await AdminPage.StartAsync();
+        if (record != null)
+        {
+            string backups = Path.Combine(Path.GetDirectoryName(page.Options.Database)!, "backups");
+            Directory.CreateDirectory(backups);
+            File.WriteAllText(Path.Combine(backups, "last-offbox"), record);
+        }
+        await page.LogInAsync();
+
+        string overview = await page.Client.GetStringAsync("/");
+
+        Assert.Contains(stat, overview);
+        if (warning == null) Assert.DoesNotContain("<p class=\"warn\">", overview);
+        else Assert.Contains(warning, overview);
+    }
+
     [Fact]
     public async Task The_overview_and_the_live_view_show_what_the_database_holds()
     {

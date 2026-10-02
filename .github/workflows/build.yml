@@ -22,9 +22,10 @@ jobs:
       - name: Test
         run: dotnet test BS3D.Api.slnx --no-build
 
-      # What root runs on the Pi (issues #3, #4, #5): every script through shellcheck, and the tunnel-token script, the
-      # admin page's launcher, the update and the firewall against stand-ins. The firewall's test checks its rules with
-      # the real nft, in a network namespace of its own, so the runner's own firewall is never touched.
+      # What root runs on the Pi (issues #3, #4, #5, #6): every script through shellcheck, and the tunnel-token script,
+      # the admin page's launcher, the update, the firewall and the backup card's setup against stand-ins. The firewall's
+      # test checks its rules with the real nft, in a network namespace of its own, so the runner's own firewall is never
+      # touched; the backup's mounts a tmpfs as the card, in a mount namespace of its own.
       - name: Deploy scripts
         run: |
           command -v nft > /dev/null || sudo apt-get install -y -qq nftables > /dev/null
@@ -33,6 +34,8 @@ jobs:
           sudo tests/deploy/install-admin.test.sh
           sudo tests/deploy/update.test.sh
           sudo tests/deploy/firewall.test.sh
+          sudo tests/deploy/backup.test.sh
+          sudo tests/deploy/backup-card.test.sh
 
       # The target the Pi runs, published on every push so a change that breaks it is caught here and not on the box
       - name: Publish for linux-arm64
