@@ -9,8 +9,9 @@ namespace BS3D.Api;
 /// <b>Boards are views over an append-only log, not tables that get updated.</b> Every accepted submission is a row
 /// of <c>submissions</c> and stays one — a clear below the player's best is kept as the record of what was sent and
 /// changes no rank — and a board is a query: the best clear per player on a key, over one UTC month or over all
-/// time, ranked with window functions. So a ranking rule can change without a migration of what was recorded, and a
-/// board that reads wrong can be recomputed rather than repaired. The only columns ever updated are
+/// time, ranked with window functions. An unfinished attempt (0 stars, #8) is a row too; it shows only for a player
+/// with no clear on the board, and below every clear. So a ranking rule can change without a migration of what was
+/// recorded, and a board that reads wrong can be recomputed rather than repaired. The only columns ever updated are
 /// <c>players.name</c> and <c>players.hidden</c>, and a submission's stored <c>answer</c>, written once in the same
 /// transaction that inserts it — kept so a retried submission is answered with what it was answered the first time.
 /// </para>
@@ -130,14 +131,19 @@ public sealed class ScoreStore(string path)
         return r.Read() ? (Guid.Parse(r.GetString(0)), r.GetString(1)) : null;
     }
 
-    /// <summary>The player's best score on a board over all time, or null for a first clear there.</summary>
-    public int? BestScore(SqliteConnection c, BoardKey board, Guid player)
+    /// <summary>
+    /// The player's best clear and best unfinished attempt on a board over all time, each null when there is none: what
+    /// a new submission's <c>personalBest</c> is measured against.
+    /// </summary>
+    public (int? Clear, int? Unfinished) BestScores(SqliteConnection c, BoardKey board, Guid player)
     {
-        object? best = Command(c, """
-            SELECT MAX(score) FROM submissions
+        using SqliteCommand cmd = Command(c, """
+            SELECT MAX(CASE WHEN stars > 0 THEN score END), MAX(CASE WHEN stars = 0 THEN score END) FROM submissions
             WHERE level_file = $f AND level_hash = $h AND rules_version = $r AND player_id = $p
-            """, ("$f", board.File), ("$h", board.Hash), ("$r", board.Rules), ("$p", player.ToString())).ExecuteScalar();
-        return best is null or DBNull ? null : Convert.ToInt32(best);
+            """, ("$f", board.File), ("$h", board.Hash), ("$r", board.Rules), ("$p", player.ToString()));
+        using SqliteDataReader r = cmd.ExecuteReader();
+        r.Read();
+        return (r.IsDBNull(0) ? null : r.GetInt32(0), r.IsDBNull(1) ? null : r.GetInt32(1));
     }
 
     public sealed record NewSubmission(
@@ -159,19 +165,29 @@ public sealed class ScoreStore(string path)
         Command(c, "UPDATE submissions SET answer = $a WHERE id = $id", ("$id", id.ToString()), ("$a", answer)).ExecuteNonQuery();
 
     /// <summary>
-    /// The best clear per visible player on a board — over one month, or over all time when <paramref name="month"/>
-    /// is null — ranked by score and then by arrival. Every board query goes through this one statement.
+    /// One row per visible player on a board — over one month, or over all time when <paramref name="month"/> is null
+    /// — ranked clears first, then by score, then by arrival. Every board query goes through this one statement.
+    /// <para>
+    /// A player's row is their best clear in the period. A player who has never cleared the board, in any month, shows
+    /// their best unfinished attempt (0 stars, #8) instead; once they clear it, their unfinished attempts leave every
+    /// period's board, an earlier month's too. So whether a player has cleared is read over all of the board's rows
+    /// (<c>cleared</c>, a window over the player's rows) before the period is chosen.
+    /// </para>
     /// </summary>
     private const string Ranked = """
-        WITH best AS (
-            SELECT s.player_id, p.name, s.score, s.stars, s.received_at, s.rowid AS seq,
-                   ROW_NUMBER() OVER (PARTITION BY s.player_id ORDER BY s.score DESC, s.rowid ASC) AS pick
+        WITH board AS (
+            SELECT s.player_id, p.name, s.score, s.stars, s.received_at, s.month, s.rowid AS seq,
+                   MAX(s.stars > 0) OVER (PARTITION BY s.player_id) AS cleared
             FROM submissions s JOIN players p ON p.id = s.player_id
-            WHERE s.level_file = $f AND s.level_hash = $h AND s.rules_version = $r AND p.hidden = 0
-              AND ($month IS NULL OR s.month = $month)),
+            WHERE s.level_file = $f AND s.level_hash = $h AND s.rules_version = $r AND p.hidden = 0),
+        best AS (
+            SELECT player_id, name, score, stars, received_at, seq,
+                   ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY score DESC, seq ASC) AS pick
+            FROM board
+            WHERE ($month IS NULL OR month = $month) AND (stars > 0 OR cleared = 0)),
         ranked AS (
             SELECT player_id, name, score, stars, received_at,
-                   ROW_NUMBER() OVER (ORDER BY score DESC, seq ASC) AS rank,
+                   ROW_NUMBER() OVER (ORDER BY stars > 0 DESC, score DESC, seq ASC) AS rank,
                    COUNT(*) OVER () AS total
             FROM best WHERE pick = 1)
         """;
@@ -179,22 +195,27 @@ public sealed class ScoreStore(string path)
     /// <summary>
     /// Every board's #1, its count and where <paramref name="player"/> stands on it (#7) - over one month, or over all
     /// time when <paramref name="month"/> is null. The same rule as <see cref="Ranked"/>, partitioned by board rather than
-    /// filtered to one, so the summary and a board's own page cannot rank differently: the best clear per visible player,
-    /// then score, then arrival.
+    /// filtered to one, so the summary and a board's own page cannot rank differently: one row per visible player (their
+    /// best clear, or their best unfinished attempt while they have never cleared the board), clears first, then score,
+    /// then arrival.
     /// </summary>
     public List<BoardSummary> Summary(SqliteConnection c, string? month, Guid? player)
     {
         using SqliteCommand cmd = Command(c, """
-            WITH best AS (
+            WITH board AS (
                 SELECT s.level_file AS f, s.level_hash AS h, s.rules_version AS r, s.player_id, p.name, s.score, s.stars,
-                       s.rowid AS seq,
-                       ROW_NUMBER() OVER (PARTITION BY s.level_file, s.level_hash, s.rules_version, s.player_id
-                                          ORDER BY s.score DESC, s.rowid ASC) AS pick
+                       s.month, s.rowid AS seq,
+                       MAX(s.stars > 0) OVER (PARTITION BY s.level_file, s.level_hash, s.rules_version, s.player_id) AS cleared
                 FROM submissions s JOIN players p ON p.id = s.player_id
-                WHERE p.hidden = 0 AND ($month IS NULL OR s.month = $month)),
+                WHERE p.hidden = 0),
+            best AS (
+                SELECT f, h, r, player_id, name, score, stars, seq,
+                       ROW_NUMBER() OVER (PARTITION BY f, h, r, player_id ORDER BY score DESC, seq ASC) AS pick
+                FROM board
+                WHERE ($month IS NULL OR month = $month) AND (stars > 0 OR cleared = 0)),
             ranked AS (
                 SELECT f, h, r, player_id, name, score, stars,
-                       ROW_NUMBER() OVER (PARTITION BY f, h, r ORDER BY score DESC, seq ASC) AS rank,
+                       ROW_NUMBER() OVER (PARTITION BY f, h, r ORDER BY stars > 0 DESC, score DESC, seq ASC) AS rank,
                        COUNT(*) OVER (PARTITION BY f, h, r) AS total
                 FROM best WHERE pick = 1)
             SELECT t.f, t.h, t.r, t.total, t.name, t.score, t.stars, m.rank, m.score, m.stars

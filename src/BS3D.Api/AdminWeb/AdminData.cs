@@ -10,16 +10,17 @@ namespace BS3D.Api.AdminWeb;
 public sealed partial class AdminData(AdminWebOptions options)
 {
     public sealed record Overview(
-        long SchemaVersion, int Players, int HiddenPlayers, int Submissions, int HiddenSubmissions,
+        long SchemaVersion, int Players, int HiddenPlayers, int Submissions, int Unfinished, int HiddenSubmissions,
         long DatabaseBytes, Backup? NewestBackup, IReadOnlyList<Day> Days, IReadOnlyList<RefusalDay> Refusals);
 
-    public sealed record Day(string Date, int Submissions, int NewPlayers);
+    /// <summary>One UTC day: the clears and unfinished attempts (0 stars, #8) accepted, and the players new that day.</summary>
+    public sealed record Day(string Date, int Clears, int Unfinished, int NewPlayers);
 
     public sealed record RefusalDay(string Date, string Reason, int Count);
 
     public sealed record Backup(string Name, long Bytes, DateTimeOffset Written);
 
-    /// <summary>One line of the live view: an accepted clear or a refusal.</summary>
+    /// <summary>One line of the live view: an accepted submission (a clear or an unfinished attempt) or a refusal.</summary>
     public sealed record Event(DateTimeOffset At, bool Accepted, string What, string Detail);
 
     /// <summary>Days the overview's tables cover, today included.</summary>
@@ -44,11 +45,13 @@ public sealed partial class AdminData(AdminWebOptions options)
         using SqliteConnection c = Open();
         string since = ScoreStore.DayOf(options.Clock.GetUtcNow().AddDays(-(Days - 1)));
 
-        Dictionary<string, (int Submissions, int Players)> days = new();
-        foreach (var (day, n) in Pairs(c, "SELECT substr(received_at, 1, 10) AS d, COUNT(*) FROM submissions WHERE d >= $since GROUP BY d", since))
-            days[day] = (n, days.GetValueOrDefault(day).Players);
+        Dictionary<string, (int Clears, int Unfinished, int Players)> days = new();
+        foreach (var (day, n) in Pairs(c, "SELECT substr(received_at, 1, 10) AS d, COUNT(*) FROM submissions WHERE d >= $since AND stars > 0 GROUP BY d", since))
+            days[day] = days.GetValueOrDefault(day) with { Clears = n };
+        foreach (var (day, n) in Pairs(c, "SELECT substr(received_at, 1, 10) AS d, COUNT(*) FROM submissions WHERE d >= $since AND stars = 0 GROUP BY d", since))
+            days[day] = days.GetValueOrDefault(day) with { Unfinished = n };
         foreach (var (day, n) in Pairs(c, "SELECT substr(created_at, 1, 10) AS d, COUNT(*) FROM players WHERE d >= $since GROUP BY d", since))
-            days[day] = (days.GetValueOrDefault(day).Submissions, n);
+            days[day] = days.GetValueOrDefault(day) with { Players = n };
 
         List<RefusalDay> refusals = new();
         using (SqliteCommand cmd = Command(c, "SELECT day, reason, count FROM refusal_days WHERE day >= $since ORDER BY day DESC, count DESC, reason", "$since", since))
@@ -60,14 +63,15 @@ public sealed partial class AdminData(AdminWebOptions options)
             (int)Scalar(c, "SELECT COUNT(*) FROM players"),
             (int)Scalar(c, "SELECT COUNT(*) FROM players WHERE hidden = 1"),
             (int)Scalar(c, "SELECT COUNT(*) FROM submissions"),
+            (int)Scalar(c, "SELECT COUNT(*) FROM submissions WHERE stars = 0"),
             (int)Scalar(c, "SELECT COUNT(*) FROM submissions s JOIN players p ON p.id = s.player_id WHERE p.hidden = 1"),
             FileBytes(options.Database) + FileBytes(options.Database + "-wal"),
             NewestBackup(),
-            days.OrderByDescending(d => d.Key).Select(d => new Day(d.Key, d.Value.Submissions, d.Value.Players)).ToList(),
+            days.OrderByDescending(d => d.Key).Select(d => new Day(d.Key, d.Value.Clears, d.Value.Unfinished, d.Value.Players)).ToList(),
             refusals);
     }
 
-    /// <summary>The newest accepted clears and refusals, newest first.</summary>
+    /// <summary>The newest accepted submissions and refusals, newest first.</summary>
     public IReadOnlyList<Event> ReadLive(int count)
     {
         using SqliteConnection c = Open();
@@ -79,7 +83,7 @@ public sealed partial class AdminData(AdminWebOptions options)
         using (SqliteDataReader r = cmd.ExecuteReader())
             while (r.Read())
                 events.Add(new Event(Time(r.GetString(0)), true, $"{r.GetString(1)}{(r.GetInt64(2) == 1 ? " (hidden)" : "")}",
-                    $"{r.GetString(3)}: {r.GetInt32(4)}, {r.GetInt32(5)}★, {r.GetString(6)}"));
+                    $"{r.GetString(3)}: {r.GetInt32(4)}, {(r.GetInt32(5) > 0 ? $"{r.GetInt32(5)}★" : "unfinished")}, {r.GetString(6)}"));
         using (SqliteCommand cmd = Command(c, "SELECT at, status, reason, method, path, detail FROM refusal_log ORDER BY id DESC LIMIT $n", "$n", count))
         using (SqliteDataReader r = cmd.ExecuteReader())
             while (r.Read())

@@ -14,7 +14,10 @@ namespace BS3D.Api;
 /// </summary>
 public static partial class Endpoints
 {
-    /// <summary>The best rating a clear can earn — BS3D's <c>StarRating.MAX</c>. A clear always earns at least one.</summary>
+    /// <summary>
+    /// The best rating a clear can earn — BS3D's <c>StarRating.MAX</c>. A clear always earns at least one, so 0 marks an
+    /// attempt that did not finish the level (#8).
+    /// </summary>
     public const int MaxStars = 4;
 
     /// <summary>A release's tag (<c>v0.2.0</c>, <c>v0.2.0-beta</c>) or a local build's <c>dev-&lt;short sha&gt;</c>.</summary>
@@ -78,7 +81,7 @@ public static partial class Endpoints
             if (player == null) store.CreatePlayer(c, body.PlayerId, Tokens.Hash(token), name, now);
             else if (player.Name != name) store.RenamePlayer(c, body.PlayerId, name);
 
-            int? previous = store.BestScore(c, board, body.PlayerId);
+            (int? bestClear, int? bestUnfinished) = store.BestScores(c, board, body.PlayerId);
 
             store.Insert(c, new ScoreStore.NewSubmission(body.SubmissionId, body.PlayerId, board, body.Score, body.Stars,
                 body.ShotsUsed, body.DurationSeconds, body.GameVersion, addresses.Hash(http),
@@ -86,7 +89,11 @@ public static partial class Endpoints
 
             SubmissionAnswer answer = new(
                 Accepted: true,
-                PersonalBest: previous == null || body.Score > previous,
+                //The row the player shows on the all-time board got better: an unfinished attempt counts only while
+                //they have never cleared the board, and never against a clear
+                PersonalBest: body.Stars > 0
+                    ? bestClear == null || body.Score > bestClear
+                    : bestClear == null && (bestUnfinished == null || body.Score > bestUnfinished),
                 Month: store.RankOf(c, board, ScoreStore.MonthOf(now), body.PlayerId).Rank,
                 AllTime: store.RankOf(c, board, null, body.PlayerId).Rank,
                 Name: name);
@@ -123,13 +130,13 @@ public static partial class Endpoints
     }
 
     /// <summary>
-    /// What makes a submission impossible, or null (issue #2). On a known board: over the ceiling, fewer shots than any
-    /// clear takes or more than the budget grants, and faster than a human fires that many. Anywhere: stars outside
-    /// 1–4, and numbers that are not numbers.
+    /// What makes a submission impossible, or null (issue #2). On a known board: over the ceiling, more shots than the
+    /// budget grants, and for a clear, fewer shots than any clear takes and faster than a human fires that many. Anywhere:
+    /// stars outside 0–4, and numbers that are not numbers.
     /// </summary>
     private static string? Implausible(SubmissionRequest s, BoardKey board, Ceilings ceilings, ScoresOptions o)
     {
-        if (s.Stars is < 1 or > MaxStars) return Reasons.BadStars;
+        if (s.Stars is < 0 or > MaxStars) return Reasons.BadStars;
         if (s.Score < 0) return Reasons.OverCeiling;
         if (s.ShotsUsed < 0) return Reasons.BadShots;
         if (!double.IsFinite(s.DurationSeconds) || s.DurationSeconds < 0) return Reasons.BadDuration;
@@ -138,7 +145,11 @@ public static partial class Endpoints
             return o.RequireKnownBoard ? Reasons.UnknownBoard : null;
 
         if (s.Score > row.Ceiling) return Reasons.OverCeiling;
-        if (s.ShotsUsed < row.MinShots || s.ShotsUsed > row.Shots) return Reasons.BadShots;
+        if (s.ShotsUsed > row.Shots) return Reasons.BadShots;
+        if (s.Stars == 0) return null;
+
+        //The floors are a clear's: an unfinished attempt can end after one shot, or before any (#8)
+        if (s.ShotsUsed < row.MinShots) return Reasons.BadShots;
         if (s.DurationSeconds < row.MinShots * o.MinSecondsPerShot) return Reasons.BadDuration;
 
         return null;

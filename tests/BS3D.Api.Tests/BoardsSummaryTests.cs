@@ -6,8 +6,8 @@ namespace BS3D.Api.Tests;
 /// <summary>
 /// <c>GET /v1/boards</c> (#7): every board's #1 and the asking player's place, in one answer for the game's High Scores
 /// screen. It ranks by the boards' own rule, partitioned by board, so the cases are the ranking cases again — each board
-/// on its own, the month, a hidden player — plus what only a summary can get wrong: two boards mixed into one ranking, a
-/// player's place on a board they never cleared, and a board no ceiling table names.
+/// on its own, the month, a hidden player, unfinished attempts (#8) — plus what only a summary can get wrong: two boards
+/// mixed into one ranking, a player's place on a board they never cleared, and a board no ceiling table names.
 /// </summary>
 public sealed class BoardsSummaryTests
 {
@@ -110,6 +110,39 @@ public sealed class BoardsSummaryTests
         BoardsSummary summary = await Summary(api, "all", player.Id);
 
         Assert.Equal(Api.File, Assert.Single(summary.Boards).File);
+    }
+
+    [Fact]
+    public async Task The_summary_ranks_unfinished_attempts_as_a_board_does()
+    {
+        using Api api = TwoBoards();
+        var nearly = Api.NewPlayer();
+        var scrappy = Api.NewPlayer();
+        var stuck = Api.NewPlayer();
+
+        // One: a 95 % loss and a one-star clear far below it. Two: only a loss
+        await api.Accepted(nearly, Api.Clear(nearly.Id, 47_500, name: "Nearly", stars: 0));
+        await api.Accepted(scrappy, Api.Clear(scrappy.Id, 800, name: "Scrappy", stars: 1));
+        await api.Accepted(stuck, Api.Clear(stuck.Id, 100, name: "Stuck", stars: 0, file: SecondFile, hash: SecondHash));
+
+        BoardsSummary summary = await Summary(api, "all", nearly.Id);
+
+        BoardSummary one = summary.Boards.Single(b => b.File == Api.File);
+        Assert.Equal(2, one.Total);
+        Assert.Equal(new BoardTop("Scrappy", 800, 1), one.Top);
+        Assert.Equal(new BoardMe(2, 47_500, 0), one.Me);
+        Assert.Equal(one.Me, (await api.Board("all", player: nearly.Id)).Me);
+
+        BoardSummary two = summary.Boards.Single(b => b.File == SecondFile);
+        Assert.Equal(new BoardTop("Stuck", 100, 0), two.Top);
+
+        // In October the stuck player clears Two: their September loss leaves September's summary, and the board with it
+        api.Clock.Advance(TimeSpan.FromDays(20));
+        await api.Accepted(stuck, Api.Clear(stuck.Id, 90, name: "Stuck", stars: 1, file: SecondFile, hash: SecondHash));
+
+        BoardsSummary september = await Summary(api, "month", stuck.Id, month: "2026-09");
+        Assert.Equal([Api.File], september.Boards.Select(b => b.File).ToList());
+        Assert.Equal(new BoardTop("Stuck", 90, 1), (await Summary(api, "all", stuck.Id)).Boards.Single(b => b.File == SecondFile).Top);
     }
 
     [Fact]
