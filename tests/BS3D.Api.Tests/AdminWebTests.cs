@@ -101,7 +101,7 @@ public sealed class AdminWebTests
     {
         await using AdminPage page = await AdminPage.StartAsync();
 
-        foreach (string path in new[] { "/", "/live", "/live?auto=1", "/style.css" })
+        foreach (string path in new[] { "/", "/live", "/live?auto=1", "/charts", "/style.css" })
             Assert.Equal(HttpStatusCode.Unauthorized, (await page.Client.GetAsync(path)).StatusCode);
     }
 
@@ -222,7 +222,7 @@ public sealed class AdminWebTests
         });
         await page.LogInAsync();
 
-        foreach (string path in new[] { "/", "/live", "/boards", "/players", $"/player?id={scripted}",
+        foreach (string path in new[] { "/", "/live", "/charts?range=all", "/boards", "/players", $"/player?id={scripted}",
                      $"/board?file={Uri.EscapeDataString(hostile.File)}&hash={Uri.EscapeDataString(hostile.Hash)}&rules=1" })
         {
             string html = await page.Client.GetStringAsync(path);
@@ -253,7 +253,7 @@ public sealed class AdminWebTests
         page.WriteCeilingTable();
         await page.LogInAsync();
 
-        foreach (string path in new[] { "/", "/live", "/boards", "/players", $"/player?id={ann}", $"/board?file={Api.File}&hash={Api.Hash}&rules={Api.Rules}" })
+        foreach (string path in new[] { "/", "/live", "/charts?range=all", "/boards", "/players", $"/player?id={ann}", $"/board?file={Api.File}&hash={Api.Hash}&rules={Api.Rules}" })
         {
             string html = await page.Client.GetStringAsync(path);
             Assert.DoesNotContain(token[..8], html);

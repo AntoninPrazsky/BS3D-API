@@ -17,7 +17,7 @@ public static partial class AdminPages
     internal static readonly string ShortVersion = Version.Split('+') is [var number, var commit] ? $"{number}+{commit[..Math.Min(7, commit.Length)]}" : Version;
 
     /// <summary>The tabs; a page that is not one of them names the one it belongs to.</summary>
-    private static readonly (string Href, string Name)[] Sections = [("/", "Overview"), ("/live", "Live"), ("/boards", "Boards"), ("/players", "Players")];
+    private static readonly (string Href, string Name)[] Sections = [("/", "Overview"), ("/live", "Live"), ("/charts", "Charts"), ("/boards", "Boards"), ("/players", "Players")];
 
     public static string Overview(AdminData.Overview o, DateTimeOffset now)
     {
