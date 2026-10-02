@@ -32,8 +32,8 @@ public static partial class AdminPages
         Markup days = Html.Join(Enumerable.Range(0, AdminData.Days).Select(i =>
         {
             string date = ScoreStore.DayOf(now.AddDays(-i));
-            AdminData.Day day = byDate.GetValueOrDefault(date) ?? new AdminData.Day(date, 0, 0);
-            return Html.M($"<tr><td>{date}</td><td class=\"n\">{day.Submissions}</td><td class=\"n\">{day.NewPlayers}</td></tr>");
+            AdminData.Day day = byDate.GetValueOrDefault(date) ?? new AdminData.Day(date, 0, 0, 0);
+            return Html.M($"<tr><td>{date}</td><td class=\"n\">{day.Clears}</td><td class=\"n\">{day.Unfinished}</td><td class=\"n\">{day.NewPlayers}</td></tr>");
         }));
 
         Markup refusals = o.Refusals.Count == 0
@@ -44,13 +44,13 @@ public static partial class AdminPages
             {warning}
             <div class="stats">
             <div class="stat"><span>Players</span><strong>{o.Players}</strong><small>{o.HiddenPlayers} hidden</small></div>
-            <div class="stat"><span>Accepted clears</span><strong>{o.Submissions}</strong><small>{o.HiddenSubmissions} by hidden players</small></div>
+            <div class="stat"><span>Accepted</span><strong>{o.Submissions}</strong><small>{o.Unfinished} unfinished · {o.HiddenSubmissions} by hidden players</small></div>
             <div class="stat"><span>Database</span><strong>{Size(o.DatabaseBytes)}</strong><small>schema {o.SchemaVersion}</small></div>
             <div class="stat"><span>Newest backup</span>{backup}</div>
             </div>
             <div class="cols">
             <section><h2>The last {AdminData.Days} days (UTC)</h2>
-            <div class="panel"><table><tr><th>Day</th><th class="n">Accepted clears</th><th class="n">New players</th></tr>{days}</table></div></section>
+            <div class="panel"><table><tr><th>Day</th><th class="n">Clears</th><th class="n">Unfinished</th><th class="n">New players</th></tr>{days}</table></div></section>
             <section><h2>Refusals (UTC days)</h2>
             <div class="panel"><table><tr><th>Day</th><th>Reason</th><th class="n">Count</th></tr>{refusals}</table></div></section>
             </div>
@@ -59,7 +59,7 @@ public static partial class AdminPages
 
     public static string Live(IReadOnlyList<AdminData.Event> events) =>
         Layout("Live", Html.M($"""
-            <p class="note">The newest {events.Count} accepted clears and refusals, newest first. Reloads every 5 seconds.</p>
+            <p class="note">The newest {events.Count} accepted submissions (clears and unfinished attempts) and refusals, newest first. Reloads every 5 seconds.</p>
             <div class="panel"><table><tr><th>When (UTC)</th><th>Result</th><th>What</th><th>Detail</th></tr>{Html.Join(events.Select(e => Html.M($"""
                 <tr class="{(e.Accepted ? "ok" : "refused")}"><td class="t">{e.At:yyyy-MM-dd HH:mm:ss}</td><td>{(e.Accepted ? Html.M($"<span class=\"chip ok\">accepted</span>") : Html.M($"<span class=\"chip bad\">refused</span>"))}</td><td><bdi>{e.What}</bdi></td><td><bdi>{e.Detail}</bdi></td></tr>
                 """)))}</table></div>

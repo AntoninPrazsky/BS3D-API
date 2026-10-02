@@ -10,25 +10,30 @@ namespace BS3D.Api.AdminWeb;
 /// </summary>
 public sealed partial class AdminData
 {
+    /// <param name="MonthPlayers">The rows of this month's board, as the game's boards count them.</param>
+    /// <param name="Unfinished">Unfinished attempts (0 stars, #8), hidden players' and those no board shows included, as <paramref name="Clears"/> counts every clear.</param>
     /// <param name="Chapter">The level's chapter (a level set's <c>block</c>), when a ceiling table names one for its file.</param>
     public sealed record BoardRow(BoardKey Key, string? Name, int? Ceiling, int? Shots, int MonthPlayers, int AllPlayers,
-        int Clears, DateTimeOffset? LastClear, bool Known, string? Chapter = null);
+        int Clears, int Unfinished, DateTimeOffset? LastPlayed, bool Known, string? Chapter = null);
 
-    public sealed record HiddenEntry(Guid Player, string Name, int Score, int Stars, int Clears);
+    /// <summary>A hidden player's best on a board by the boards' rule: their best clear, or their best unfinished attempt if they have none.</summary>
+    public sealed record HiddenEntry(Guid Player, string Name, int Score, int Stars, int Clears, int Unfinished);
 
     public sealed record BoardView(BoardKey Key, CeilingRow? Ceiling, string Month,
         IReadOnlyList<BoardEntry> MonthEntries, int MonthTotal, IReadOnlyList<BoardEntry> AllEntries, int AllTotal,
         IReadOnlyList<HiddenEntry> Hidden);
 
-    public sealed record PlayerRow(Guid Id, string Name, DateTimeOffset Created, bool Hidden, int Clears,
-        DateTimeOffset? LastClear, int Addresses, IReadOnlyList<(Guid Id, string Name)> SharesWith);
+    public sealed record PlayerRow(Guid Id, string Name, DateTimeOffset Created, bool Hidden, int Clears, int Unfinished,
+        DateTimeOffset? LastPlayed, int Addresses, IReadOnlyList<(Guid Id, string Name)> SharesWith);
 
-    public sealed record PlayerClear(DateTimeOffset At, BoardKey Board, int Score, int Stars, int Shots, double Seconds,
+    /// <summary>One accepted submission: a clear, or with 0 stars an unfinished attempt (#8).</summary>
+    public sealed record PlayerSubmission(DateTimeOffset At, BoardKey Board, int Score, int Stars, int Shots, double Seconds,
         string GameVersion, string? UserAgent, string Address);
 
-    public sealed record PlayerBoard(BoardKey Board, int Best, BoardRank Month, BoardRank AllTime);
+    /// <summary>A board the player has sent to: their best by the boards' rule (<see cref="HiddenEntry"/>'s), and where they stand.</summary>
+    public sealed record PlayerBoard(BoardKey Board, int Best, int BestStars, BoardRank Month, BoardRank AllTime);
 
-    public sealed record PlayerView(PlayerRow Player, IReadOnlyList<PlayerBoard> Boards, IReadOnlyList<PlayerClear> Clears);
+    public sealed record PlayerView(PlayerRow Player, IReadOnlyList<PlayerBoard> Boards, IReadOnlyList<PlayerSubmission> Submissions);
 
     /// <summary>Entries a board view lists per period; the view says how many there are in all.</summary>
     public const int BoardLimit = 100;
@@ -38,39 +43,51 @@ public sealed partial class AdminData
     {
         ["name"] = "p.name COLLATE NOCASE, p.created_at",
         ["created"] = "p.created_at DESC",
-        ["last"] = "last_clear DESC, p.name COLLATE NOCASE",
+        ["last"] = "last_played DESC, p.name COLLATE NOCASE",
         ["clears"] = "clears DESC, p.name COLLATE NOCASE",
     };
 
     public Ceilings LoadCeilings() => Ceilings.Load(options.CeilingsDirectory, NullLogger.Instance);
 
     /// <summary>
-    /// Every board a ceiling table names, chapter by chapter in play order, then every board with a clear on it that no
-    /// table names. Place and chapter belong to a level's file (<see cref="Ceilings.Levels"/>), so every version of a
-    /// level stands together, in its chapter.
+    /// Every board a ceiling table names, chapter by chapter in play order, then every board with a submission on it that
+    /// no table names. Place and chapter belong to a level's file (<see cref="Ceilings.Levels"/>), so every version of a
+    /// level stands together, in its chapter. The players are counted by the game's own summary (<c>GET /v1/boards</c>),
+    /// so a count is the length of the board the game shows.
     /// </summary>
     public IReadOnlyList<BoardRow> ReadBoards(Ceilings ceilings)
     {
         using SqliteConnection c = Open();
-        Dictionary<BoardKey, (int Month, int All, int Clears, DateTimeOffset? Last)> counts = new();
-        using (SqliteCommand cmd = Command(c, """
-            SELECT s.level_file, s.level_hash, s.rules_version,
-                   COUNT(DISTINCT CASE WHEN p.hidden = 0 AND s.month = $month THEN s.player_id END),
-                   COUNT(DISTINCT CASE WHEN p.hidden = 0 THEN s.player_id END),
-                   COUNT(*), MAX(s.received_at)
-            FROM submissions s JOIN players p ON p.id = s.player_id
-            GROUP BY s.level_file, s.level_hash, s.rules_version
-            """, "$month", ScoreStore.MonthOf(options.Clock.GetUtcNow())))
-        using (SqliteDataReader r = cmd.ExecuteReader())
+        ScoreStore store = new(options.Database);
+        Dictionary<BoardKey, int> month = store.Summary(c, ScoreStore.MonthOf(options.Clock.GetUtcNow()), null)
+            .ToDictionary(b => new BoardKey(b.File, b.Hash, b.Rules), b => b.Total);
+        Dictionary<BoardKey, int> all = store.Summary(c, null, null).ToDictionary(b => new BoardKey(b.File, b.Hash, b.Rules), b => b.Total);
+
+        Dictionary<BoardKey, (int Clears, int Unfinished, DateTimeOffset? Last)> counts = new();
+        using (SqliteCommand cmd = c.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT level_file, level_hash, rules_version, COUNT(CASE WHEN stars > 0 THEN 1 END),
+                       COUNT(CASE WHEN stars = 0 THEN 1 END), MAX(received_at)
+                FROM submissions GROUP BY level_file, level_hash, rules_version
+                """;
+            using SqliteDataReader r = cmd.ExecuteReader();
             while (r.Read())
-                counts[new BoardKey(r.GetString(0), r.GetString(1), r.GetInt32(2))] = (r.GetInt32(3), r.GetInt32(4), r.GetInt32(5), Time(r.GetString(6)));
+                counts[new BoardKey(r.GetString(0), r.GetString(1), r.GetInt32(2))] = (r.GetInt32(3), r.GetInt32(4), Time(r.GetString(5)));
+        }
+
+        BoardRow Row(BoardKey key, CeilingRow? row, bool known, string? chapter)
+        {
+            var n = counts.GetValueOrDefault(key);
+            return new BoardRow(key, row?.Name, row?.Ceiling, row?.Shots, month.GetValueOrDefault(key), all.GetValueOrDefault(key),
+                n.Clears, n.Unfinished, n.Last, known, chapter);
+        }
 
         var known = ceilings.All.Select(row =>
         {
             BoardKey key = new(row.File, row.Hash, row.RulesVersion);
-            var n = counts.GetValueOrDefault(key);
             var (position, chapter) = ceilings.Levels[row.File];
-            return (Row: new BoardRow(key, row.Name, row.Ceiling, row.Shots, n.Month, n.All, n.Clears, n.Last, Known: true, chapter), Position: position);
+            return (Row: Row(key, row, true, chapter), Position: position);
         }).ToList();
         // A chapter comes where its first level does, its name settling a tie so that two chapters never mix; levels
         // without one come after every chapter
@@ -84,7 +101,7 @@ public sealed partial class AdminData
             .Select(k => k.Row)
             .Concat(counts.Where(n => !named.Contains(n.Key)).OrderBy(n => n.Key.File, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(n => n.Key.Hash, StringComparer.Ordinal)
-                .Select(n => new BoardRow(n.Key, null, null, null, n.Value.Month, n.Value.All, n.Value.Clears, n.Value.Last, Known: false)))
+                .Select(n => Row(n.Key, null, false, null)))
             .ToList();
     }
 
@@ -100,18 +117,20 @@ public sealed partial class AdminData
         using (SqliteCommand cmd = c.CreateCommand())
         {
             cmd.CommandText = """
-                SELECT p.id, p.name, MAX(s.score), COUNT(*),
-                       (SELECT s2.stars FROM submissions s2 WHERE s2.player_id = p.id AND s2.level_file = $f AND s2.level_hash = $h
-                          AND s2.rules_version = $r ORDER BY s2.score DESC, s2.rowid LIMIT 1)
-                FROM submissions s JOIN players p ON p.id = s.player_id
-                WHERE s.level_file = $f AND s.level_hash = $h AND s.rules_version = $r AND p.hidden = 1
-                GROUP BY p.id ORDER BY 3 DESC
+                WITH theirs AS (
+                    SELECT p.id, p.name, s.score, s.stars,
+                           ROW_NUMBER() OVER (PARTITION BY p.id ORDER BY s.stars > 0 DESC, s.score DESC, s.rowid) AS pick,
+                           COUNT(CASE WHEN s.stars > 0 THEN 1 END) OVER (PARTITION BY p.id) AS clears,
+                           COUNT(CASE WHEN s.stars = 0 THEN 1 END) OVER (PARTITION BY p.id) AS unfinished
+                    FROM submissions s JOIN players p ON p.id = s.player_id
+                    WHERE s.level_file = $f AND s.level_hash = $h AND s.rules_version = $r AND p.hidden = 1)
+                SELECT id, name, score, stars, clears, unfinished FROM theirs WHERE pick = 1 ORDER BY stars > 0 DESC, score DESC
                 """;
             cmd.Parameters.AddWithValue("$f", key.File);
             cmd.Parameters.AddWithValue("$h", key.Hash);
             cmd.Parameters.AddWithValue("$r", key.Rules);
             using SqliteDataReader r = cmd.ExecuteReader();
-            while (r.Read()) hidden.Add(new HiddenEntry(Guid.Parse(r.GetString(0)), r.GetString(1), r.GetInt32(2), r.GetInt32(4), r.GetInt32(3)));
+            while (r.Read()) hidden.Add(new HiddenEntry(Guid.Parse(r.GetString(0)), r.GetString(1), r.GetInt32(2), r.GetInt32(3), r.GetInt32(4), r.GetInt32(5)));
         }
 
         int allTotal = boards.Total(c, key, null);
@@ -126,12 +145,12 @@ public sealed partial class AdminData
     {
         using SqliteConnection c = Open();
         Dictionary<Guid, string> names = new();
-        List<(Guid Id, string Name, DateTimeOffset Created, bool Hidden, int Clears, DateTimeOffset? Last, int Addresses)> players = new();
+        List<(Guid Id, string Name, DateTimeOffset Created, bool Hidden, int Clears, int Unfinished, DateTimeOffset? Last, int Addresses)> players = new();
         using (SqliteCommand cmd = c.CreateCommand())
         {
             cmd.CommandText = $"""
-                SELECT p.id, p.name, p.created_at, p.hidden, COUNT(s.id) AS clears, MAX(s.received_at) AS last_clear,
-                       COUNT(DISTINCT s.ip_hash)
+                SELECT p.id, p.name, p.created_at, p.hidden, COUNT(CASE WHEN s.stars > 0 THEN 1 END) AS clears,
+                       COUNT(CASE WHEN s.stars = 0 THEN 1 END), MAX(s.received_at) AS last_played, COUNT(DISTINCT s.ip_hash)
                 FROM players p LEFT JOIN submissions s ON s.player_id = p.id
                 GROUP BY p.id ORDER BY {PlayerOrders.GetValueOrDefault(order ?? "", PlayerOrders["name"])}
                 """;
@@ -140,16 +159,16 @@ public sealed partial class AdminData
             {
                 Guid id = Guid.Parse(r.GetString(0));
                 names[id] = r.GetString(1);
-                players.Add((id, r.GetString(1), Time(r.GetString(2)), r.GetInt64(3) == 1, r.GetInt32(4),
-                    r.IsDBNull(5) ? null : Time(r.GetString(5)), r.GetInt32(6)));
+                players.Add((id, r.GetString(1), Time(r.GetString(2)), r.GetInt64(3) == 1, r.GetInt32(4), r.GetInt32(5),
+                    r.IsDBNull(6) ? null : Time(r.GetString(6)), r.GetInt32(7)));
             }
         }
         ILookup<Guid, Guid> shares = Sharing(c);
-        return players.Select(p => new PlayerRow(p.Id, p.Name, p.Created, p.Hidden, p.Clears, p.Last, p.Addresses,
+        return players.Select(p => new PlayerRow(p.Id, p.Name, p.Created, p.Hidden, p.Clears, p.Unfinished, p.Last, p.Addresses,
             shares[p.Id].Select(other => (other, names[other])).ToList())).ToList();
     }
 
-    /// <summary>One player: every clear, newest first, the addresses lettered A, B… in the order they first appear, and where they stand on each board.</summary>
+    /// <summary>One player: every submission, newest first, the addresses lettered A, B… in the order they first appear, and where they stand on each board.</summary>
     public PlayerView? ReadPlayer(Guid id)
     {
         PlayerRow? player = ReadPlayers(null).FirstOrDefault(p => p.Id == id);
@@ -173,11 +192,14 @@ public sealed partial class AdminData
 
         ScoreStore boards = new(options.Database);
         string month = ScoreStore.MonthOf(options.Clock.GetUtcNow());
-        List<PlayerBoard> standing = rows.GroupBy(r => r.Board).Select(g => new PlayerBoard(g.Key, g.Max(r => r.Score),
-            boards.RankOf(c, g.Key, month, id).Rank, boards.RankOf(c, g.Key, null, id).Rank)).ToList();
+        List<PlayerBoard> standing = rows.GroupBy(r => r.Board).Select(g =>
+        {
+            var best = g.OrderByDescending(r => r.Stars > 0).ThenByDescending(r => r.Score).First();
+            return new PlayerBoard(g.Key, best.Score, best.Stars, boards.RankOf(c, g.Key, month, id).Rank, boards.RankOf(c, g.Key, null, id).Rank);
+        }).ToList();
 
         return new PlayerView(player, standing.OrderBy(b => b.Board.File, StringComparer.OrdinalIgnoreCase).ToList(),
-            rows.Select(r => new PlayerClear(r.At, r.Board, r.Score, r.Stars, r.Shots, r.Seconds, r.Version, r.Agent, letters[r.Hash]))
+            rows.Select(r => new PlayerSubmission(r.At, r.Board, r.Score, r.Stars, r.Shots, r.Seconds, r.Version, r.Agent, letters[r.Hash]))
                 .Reverse().ToList());
     }
 

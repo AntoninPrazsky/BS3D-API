@@ -58,7 +58,7 @@ public sealed class AdminViewTests
 
     /// <summary>The boards list's chapter headings, top to bottom.</summary>
     private static List<string> Chapters(string html) =>
-        Regex.Matches(html, @"<tr class=""group""><th colspan=""8""><bdi>([^<]*)</bdi>").Select(m => WebUtility.HtmlDecode(m.Groups[1].Value)).ToList();
+        Regex.Matches(html, @"<tr class=""group""><th colspan=""9""><bdi>([^<]*)</bdi>").Select(m => WebUtility.HtmlDecode(m.Groups[1].Value)).ToList();
 
     private static void WriteTable(AdminPage page, string name, params string[] levels)
     {
@@ -147,6 +147,42 @@ public sealed class AdminViewTests
     }
 
     [Fact]
+    public async Task Unfinished_attempts_are_marked_and_the_players_counted_as_the_game_counts_them()
+    {
+        Guid ann = Guid.Empty;
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            ann = AdminPage.AddPlayer(store, c, LastMonth, "Ann");
+            AdminPage.AddClear(store, c, LastMonth, ann, 300);
+            AdminPage.AddClear(store, c, now, ann, 900, stars: 0);       // a loss after her clear: on no board this month
+            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, "Bob"), 47_500, stars: 0);   // never cleared: his loss is his row
+            Guid hid = AdminPage.AddPlayer(store, c, now, "Hid");
+            store.SetHidden(c, hid, true);
+            AdminPage.AddClear(store, c, now, hid, 40_000, stars: 0);
+            AdminPage.AddClear(store, c, now, hid, 200, stars: 1);
+        });
+        page.WriteCeilingTable();
+        await page.LogInAsync();
+
+        // Players this month: Bob; all time: Ann and Bob. Every clear (Ann's, Hid's) and every unfinished attempt (3) counted
+        Assert.Matches(@">One</a></td>\s*<td><code>One\.json#0123456789abcdef r1</code></td><td class=""n"">50,000</td>\s*<td class=""n"">30</td><td class=""n"">1</td><td class=""n"">2</td><td class=""n"">2</td><td class=""n"">3</td>",
+            await page.Client.GetStringAsync("/boards"));
+
+        string board = await page.Client.GetStringAsync($"/board?file={Api.File}&hash={Api.Hash}&rules={Api.Rules}");
+        Assert.Equal(["Bob"], Names(Between(board, "<h2>2026-09", "<h2>All time")));
+        Assert.Equal(["Ann", "Bob"], Names(Between(board, "<h2>All time", "<h2>Hidden")));
+        Assert.Contains("<td class=\"n\">47,500</td><td class=\"n\"><span class=\"chip muted\">unfinished</span></td>", Between(board, "<h2>All time", "<h2>Hidden"));
+        // The hidden player's best is their clear, by the boards' rule, not their higher loss
+        Assert.Contains("<bdi>Hid</bdi></a></td><td class=\"n\">200</td><td class=\"n\">1</td><td class=\"n\">1</td><td class=\"n\">1</td>", Between(board, "<h2>Hidden", "</table>"));
+
+        string player = await page.Client.GetStringAsync($"/player?id={ann}");
+        Assert.Matches(@"<td class=""n"">300</td><td class=""n"">3</td>\s*<td>not on it \(1\)</td><td>#1 of 2</td>", player);
+        Assert.Contains("<td class=\"n\">900</td><td class=\"n\"><span class=\"chip muted\">unfinished</span></td>", Between(player, "<h2>Submissions", "</table>"));
+
+        Assert.Contains("One.json: 900, unfinished", await page.Client.GetStringAsync("/live"));
+    }
+
+    [Fact]
     public async Task The_players_show_their_clears_addresses_and_who_shares_one_never_the_address()
     {
         Guid ann = Guid.Empty, bob = Guid.Empty;
@@ -191,8 +227,8 @@ public sealed class AdminViewTests
 
         string html = await page.Client.GetStringAsync($"/player?id={ann}");
 
-        // Newest first: the third clear came from the first address again
-        Assert.Equal(["A", "B", "A"], Regex.Matches(Between(html, "<h2>Clears", "</table>"), @"<td>([A-Z])</td></tr>").Select(m => m.Groups[1].Value).Reverse().ToList());
+        // Newest first: the third submission came from the first address again
+        Assert.Equal(["A", "B", "A"], Regex.Matches(Between(html, "<h2>Submissions", "</table>"), @"<td>([A-Z])</td></tr>").Select(m => m.Groups[1].Value).Reverse().ToList());
         Assert.Contains("<td>#2 of 2</td><td>#2 of 2</td>", html);
         Assert.DoesNotContain("ADDRESS", html);
         Assert.Contains("<td>hidden</td><td>hidden</td>", await page.Client.GetStringAsync($"/player?id={hid}"));

@@ -163,8 +163,8 @@ public sealed class AdminWebTests
 
         string overview = await page.Client.GetStringAsync("/");
         Assert.Contains("<strong>2</strong><small>1 hidden</small>", overview);
-        Assert.Contains("<strong>2</strong><small>0 by hidden players</small>", overview);
-        Assert.Contains("<tr><td>2026-09-15</td><td class=\"n\">2</td><td class=\"n\">2</td></tr>", overview);
+        Assert.Contains("<strong>2</strong><small>0 unfinished · 0 by hidden players</small>", overview);
+        Assert.Contains("<tr><td>2026-09-15</td><td class=\"n\">2</td><td class=\"n\">0</td><td class=\"n\">2</td></tr>", overview);
         Assert.Contains($"<tr><td>2026-09-15</td><td>{Reasons.OverCeiling}</td><td class=\"n\">2</td></tr>", overview);
 
         string live = await page.Client.GetStringAsync("/live");

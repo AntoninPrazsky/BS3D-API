@@ -90,9 +90,10 @@ public sealed class AdminPage : IAsyncDisposable
         return id;
     }
 
+    /// <summary>An accepted submission, straight into the store: a clear, or with <paramref name="stars"/> 0 an unfinished attempt.</summary>
     public static void AddClear(ScoreStore store, SqliteConnection c, DateTimeOffset now, Guid player, int score, string ipHash = "1PHASH0000000000",
-        BoardKey? board = null) =>
-        store.Insert(c, new ScoreStore.NewSubmission(Guid.NewGuid(), player, board ?? new BoardKey(Api.File, Api.Hash, Api.Rules), score, 3, 10, 60,
+        BoardKey? board = null, int stars = 3) =>
+        store.Insert(c, new ScoreStore.NewSubmission(Guid.NewGuid(), player, board ?? new BoardKey(Api.File, Api.Hash, Api.Rules), score, stars, 10, 60,
             "v0.2.1", ipHash, "BS3D/v0.2.1", now));
 
     /// <summary>A ceiling table naming <c>One.json</c> (the board <see cref="Api"/> uses) and <c>Two.json</c>.</summary>
