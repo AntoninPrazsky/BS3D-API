@@ -150,7 +150,12 @@ What this Pi has beyond a fresh Raspberry Pi OS, each with its check:
   rdt ALL=(root) NOPASSWD: /opt/bs3d-api/current/deploy/update.sh, /opt/bs3d-api/current/deploy/update-ceilings.sh, /usr/local/sbin/bs3d-db-snapshot
   ```
   So a password counts only in the terminal it was typed in, and only these root-owned scripts, which `rdt` cannot change, run without one. `bs3d-db-snapshot` is this Pi's own: a consistent copy of the database into the caller's `~/bs3d-snapshots` for a SQLite browser. Check: after `sudo true` in one terminal, `sudo -n true` in another says a password is required, and `sudo -n -l` lists exactly those three, and with the admin page's launcher installed, `(bs3d-api) NOPASSWD: /usr/local/libexec/bs3d-admin-run`. Without Yama (this kernel has none), a compromised account can still capture the password from its own shells; this closes the free path, not every path.
-- **The service apart from the admin page** (#5), which also runs as `bs3d-api`: `bs3d-api.service` has `PrivatePIDs=yes`, so in a PID namespace of its own it can neither see, signal nor ptrace the page, and `InaccessiblePaths=/dev/pts`, so it cannot open the pseudo-terminal sudo gives the page, which belongs to `bs3d-api`, and write to the owner's terminal. Check: `systemctl show bs3d-api -p PrivatePIDs,InaccessiblePaths` says `yes` and `/dev/pts`, and the `NSpid` line of `/proc/$(systemctl show bs3d-api -p MainPID --value)/status` holds two numbers, the second 1.
+- **The service apart from the admin page** (#5), which also runs as `bs3d-api`.
+  - `bs3d-api.service` has `InaccessiblePaths=/dev/pts`, so the service cannot open the pseudo-terminal sudo gives the page, which belongs to `bs3d-api`, and write to the owner's terminal.
+  - The page makes itself undumpable, so the service cannot ptrace it or read its memory.
+  - `PrivatePIDs=yes` was in the unit from v0.1.9 to v0.1.14 and is gone since v0.1.15. systemd 257 took the service for a process not its own and stopped it with SIGKILL at once in 3 of 6 stops, skipping the graceful shutdown. What it added was that the page could be neither seen nor signalled, which protects nothing the service cannot read for itself.
+
+  Check: `systemctl show bs3d-api -p InaccessiblePaths` says `/dev/pts`.
 
 ## Developing
 
