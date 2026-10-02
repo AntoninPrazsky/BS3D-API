@@ -6,6 +6,18 @@ The score service behind the online per-level leaderboards of [BS3D](https://git
 
 Raspberry Pi OS **64-bit** (the release is `linux-arm64`, self-contained: nothing .NET is installed on the Pi).
 
+**What it costs the Pi** (a Raspberry Pi 5 with 8 GB, v0.1.12, measured 2026-10-02 with 2 players, 15 clears and 148 boards; a board's cost grows with its clears):
+- **Idle:** 0.02 % of one core over a minute, and about 100 MB resident (109 MB after the 600 requests below).
+- **Requests on loopback, 200 of each:**
+
+| Request | Median | 95th percentile | Service CPU per request |
+|---|---|---|---|
+| One board, `GET /v1/boards/{file}` | 1.9 ms | 3.0 ms | 3.0 ms |
+| Every board, `GET /v1/boards` | 1.6 ms | 2.3 ms | 2.0 ms |
+| `GET /v1/health` | 0.6 ms | 1.1 ms | 0.8 ms |
+
+Through the tunnel the round trip to Cloudflare's edge comes on top.
+
 ### A fresh Pi
 
 ```bash
