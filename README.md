@@ -36,7 +36,7 @@ journalctl -u bs3d-api -n 50
 
 ### The tunnel (issues #2, #4)
 
-Nothing is opened on the router: `cloudflared` on the Pi connects **out** to Cloudflare, and Cloudflare sends the public hostname's requests down that connection to `http://127.0.0.1:5000`. It needs a domain whose DNS Cloudflare serves. (That is the IPv4 picture; IPv6 has no NAT, see "Hardening the Pi".)
+Nothing is opened on the router: `cloudflared` on the Pi connects **out** to Cloudflare, and Cloudflare sends the public hostname's requests down that connection to `http://127.0.0.1:5000`. It needs a domain whose DNS Cloudflare serves. (That is the IPv4 picture; IPv6 has no NAT, and the Pi's own firewall covers it: see "Hardening the Pi".)
 
 1. **`cloudflared` from Cloudflare's apt repository.** Check the key before trusting it: fingerprint `CC94 B39C 77AE 7342 A68B 8962 8A68 2D30 8D4E 5E73`, "CloudFlare Software Packaging 2025", the same on keys.openpgp.org and keyserver.ubuntu.com on 2026-10-01.
    ```bash
@@ -130,7 +130,20 @@ What this Pi has beyond a fresh Raspberry Pi OS, each with its check:
 
 - **SSH by key only.** `/etc/ssh/sshd_config.d/10-keys-only.conf` holds `PasswordAuthentication no` and `KbdInteractiveAuthentication no`. sshd keeps the first value it reads, and Raspberry Pi Imager's `50-cloud-init.conf` turns passwords on, so the file's name must sort before it. Apply with `sudo sshd -t && sudo systemctl reload ssh`, keeping the current session open until a new key login works. Check: `ssh -o PreferredAuthentications=none <user>@<the Pi>` answers `Permission denied (publickey)`.
 - **rpcbind off.** Raspberry Pi OS installs it for NFS, and it listens on every address: `sudo systemctl disable --now rpcbind.service rpcbind.socket`. Check: `sudo ss -tulpn | grep -w 111` prints nothing, also after a reboot.
-- **Inbound IPv6.** The Pi has a global IPv6 address, and sshd listens on `[::]`. Whether the router drops unsolicited inbound IPv6 can only be seen from outside: `curl -6 https://ifconfig.co/port/22` asks a public service to connect back to the asking address, and `"reachable": false` is the answer wanted. Nothing is meant to answer, so that service has no positive control here: it suggests, it does not prove (#4 item 5 holds the firewall for the Pi itself).
+- **Inbound IPv6.** The Pi has a global IPv6 address, and sshd listens on `[::]`. Whether the router drops unsolicited inbound IPv6 can only be seen from outside: `curl -6 https://ifconfig.co/port/22` asks a public service to connect back to the asking address, and `"reachable": false` is the answer wanted. Nothing is meant to answer, so that service has no positive control here: it suggests, it does not prove.
+- **The Pi's own firewall** (#4 item 5), because a router's IPv6 filtering can change with a firmware update or a UPnP/PCP pinhole. nftables drops every inbound packet except these:
+  - SSH (22), VNC (5900) and mDNS (5353) from the home network: its IPv4 prefix, IPv6 link-local and its IPv6 prefixes;
+  - ICMP, which IPv6 needs to work;
+  - DHCP answers;
+  - the answers to what the Pi asked for itself, the tunnel included.
+
+  Nothing is forwarded, and outbound is free. `deploy/firewall.sh` writes `/etc/nftables.conf` from `deploy/nftables.conf`, filling in the prefixes of the network the default route leaves by. It checks the result with `nft -c` and arms an undo before loading it:
+  ```bash
+  sudo /opt/bs3d-api/current/deploy/firewall.sh              # load, flushed again in 3 minutes unless confirmed
+  sudo /opt/bs3d-api/current/deploy/firewall.sh --confirm    # from a NEW SSH login: keep, and load at every boot
+  sudo /opt/bs3d-api/current/deploy/firewall.sh --remove     # flush, stop loading at boot, put the old file back
+  ```
+  Run it again when the home network's prefixes change. Check: `sudo nft list ruleset` shows `policy drop`, also after a reboot, and the desktop still gets in over SSH (and VNC).
 - **The sudo timestamp per terminal.** Raspberry Pi OS makes it global (`/etc/sudoers.d/010_global-tty`, from `raspberrypi-sys-mods`): after one `sudo` in any terminal, every process running as the same user could run `sudo -n` as root for 15 minutes. `/etc/sudoers.d/020_rdt-tty` (root, 0440, checked with `sudo visudo -cf` before it is installed) sorts after it and holds:
   ```
   Defaults:rdt timestamp_type=tty
@@ -141,4 +154,4 @@ What this Pi has beyond a fresh Raspberry Pi OS, each with its check:
 
 ## Developing
 
-See `CLAUDE.md`. What the service answers is contract v1 (BS3D#542), plus `GET /v1/boards` since #7, the summary of every board the game's High Scores screen asks for. `dotnet test BS3D.Api.slnx`, and for the deploy scripts `shellcheck deploy/*.sh tests/deploy/*.sh`, `sudo tests/deploy/tunnel-token.test.sh`, `sudo tests/deploy/install-admin.test.sh` and `sudo tests/deploy/update.test.sh` (Linux; the last two also run as `unshare -r`, without sudo); a local run the game can submit to is `dotnet run --project src/BS3D.Api --urls http://localhost:5000` with `"server": "http://localhost:5000"` in the game's `Settings.json`.
+See `CLAUDE.md`. What the service answers is contract v1 (BS3D#542), plus `GET /v1/boards` since #7, the summary of every board the game's High Scores screen asks for. `dotnet test BS3D.Api.slnx`, and for the deploy scripts `shellcheck deploy/*.sh tests/deploy/*.sh`, `sudo tests/deploy/tunnel-token.test.sh`, `sudo tests/deploy/install-admin.test.sh`, `sudo tests/deploy/update.test.sh` and `sudo tests/deploy/firewall.test.sh` (Linux; the last three also run without sudo, as `unshare -r`, and the firewall's as `unshare -rn`); a local run the game can submit to is `dotnet run --project src/BS3D.Api --urls http://localhost:5000` with `"server": "http://localhost:5000"` in the game's `Settings.json`.
