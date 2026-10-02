@@ -216,6 +216,9 @@ public sealed class AdminWebTests
         {
             ann = AdminPage.AddPlayer(store, c, now, "Ann", token);
             AdminPage.AddClear(store, c, now, ann, 100, address);
+            // A rate-limited address is named by its hash in the refusal log, as in the journal
+            store.WriteRefusals(c, new Refusals.Batch(new Dictionary<(string, string), int> { [(ScoreStore.DayOf(now), Reasons.RateLimited)] = 1 },
+                [new Refusals.Entry(now, 429, Reasons.RateLimited, "POST", "/v1/scores", $"address {address}")], 0), now, TimeSpan.FromDays(7), 100);
         });
         page.WriteCeilingTable();
         await page.LogInAsync();
@@ -226,6 +229,7 @@ public sealed class AdminWebTests
             Assert.DoesNotContain(token[..8], html);
             Assert.DoesNotContain(address[..8], html);
         }
+        Assert.Contains("an address (its hash is not shown)", await page.Client.GetStringAsync("/live"));
     }
 
     [Fact]
