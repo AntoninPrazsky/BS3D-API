@@ -76,19 +76,34 @@ sudo systemctl restart cloudflared      # or reboot, which a kernel or firmware 
 
 ### Backups and restoring
 
-Every night at 03:30 (or at the next boot, if the Pi was off) `bs3d-api-backup.timer` writes a consistent copy of the live database to `/var/lib/bs3d-api/backups/scores-<time>.db` and deletes copies older than thirty days. **A copy on the same SD card does not survive the card**, so set an off-box target once:
+Every night at 03:30 (or at the next boot, if the Pi was off) `bs3d-api-backup.timer` writes a consistent copy of the live database to `/var/lib/bs3d-api/backups/scores-<time>.db` and deletes copies older than thirty days. **A copy on the Pi's own disk does not survive the disk** (#6), so each copy also goes to a microSD card in the Pi's slot, or a USB drive. Set the card up once. **It erases the card:**
 
 ```bash
-echo 'BACKUP_OFFBOX_TARGET=you@desktop:/backups/bs3d-api/' | sudo tee /etc/bs3d-api/backup.env
+lsblk
+sudo /opt/bs3d-api/current/deploy/backup-card.sh /dev/mmcblk0
 ```
 
-(`rsync` over SSH, so the `bs3d-api` user needs a key the target accepts.) Run a backup by hand with `sudo systemctl start bs3d-api-backup` and read what it did with `journalctl -u bs3d-api-backup -n 20`.
+(`lsblk` shows the card: in the slot it is `mmcblk0`.) What the setup does:
+
+- **It guards the other disks.** It takes only a whole disk in the SD slot or on USB. It refuses a disk with anything mounted, and the disk the system runs from. It erases nothing until the card's name is typed back.
+- **It formats and mounts the card:** ext4, labelled `bs3d-backup`, mounted at `/mnt/bs3d-backup` through `/etc/fstab` with `nofail`, so a missing card never stops the Pi booting. The fstab from before is kept as `/etc/fstab.before-bs3d-backup`.
+- **It points the backup at the card:** `BACKUP_OFFBOX_MOUNT` and `BACKUP_OFFBOX_TARGET` go into `/etc/bs3d-api/backup.env`. Then it runs one backup and shows the result.
+
+From then on every nightly copy also goes to `/mnt/bs3d-backup/bs3d-api/`. Copies there are kept a year; `BACKUP_OFFBOX_KEEP_DAYS` in `backup.env` changes that. With the card pulled, the run fails, rather than writing into the empty mount point on the NVMe and calling it a success.
+
+**Each run's result is recorded** in `/var/lib/bs3d-api/backups/last-offbox`, which, unlike the journal, survives a reboot. The admin page's overview shows how old the newest copy off the box is. It warns when none is set up, when the last copy failed, or when the newest one is over two days old. `--remove` stops using the card; the copies on it stay.
+
+**Boot order:** the Pi 5 looks for a system on a card in the slot before the NVMe (`BOOT_ORDER=0xf461` here). This card holds none, so the Pi boots from the NVMe as before. Never leave a card with Raspberry Pi OS on it in the slot.
+
+**What the card does not cover:** it survives the NVMe failing, not the Pi lost or the house burnt. An encrypted off-site copy is the next step in #6. A target over SSH also works (`BACKUP_OFFBOX_TARGET=user@host:/backups/bs3d-api/`, by `rsync`, with a key for the `bs3d-api` user the host accepts), but not to Windows, which has no `rsync`.
+
+Run a backup by hand with `sudo systemctl start bs3d-api-backup`. Read what it did with `journalctl -u bs3d-api-backup -n 20` and `sudo cat /var/lib/bs3d-api/backups/last-offbox`.
 
 To restore:
 
 ```bash
 sudo systemctl stop bs3d-api
-sudo cp /var/lib/bs3d-api/backups/scores-<time>.db /var/lib/bs3d-api/scores.db
+sudo cp /var/lib/bs3d-api/backups/scores-<time>.db /var/lib/bs3d-api/scores.db   # or from /mnt/bs3d-backup/bs3d-api/
 sudo rm -f /var/lib/bs3d-api/scores.db-wal /var/lib/bs3d-api/scores.db-shm
 sudo chown bs3d-api:bs3d-api /var/lib/bs3d-api/scores.db
 sudo systemctl start bs3d-api
@@ -161,4 +176,4 @@ What this Pi has beyond a fresh Raspberry Pi OS, each with its check:
 
 ## Developing
 
-See `CLAUDE.md`. What the service answers is contract v1 (BS3D#542), plus `GET /v1/boards` since #7, the summary of every board the game's High Scores screen asks for, and since #8 unfinished attempts (0 stars), ranked below every clear and shown only for a player who has never cleared the board. `dotnet test BS3D.Api.slnx`, and for the deploy scripts `shellcheck deploy/*.sh tests/deploy/*.sh`, `sudo tests/deploy/tunnel-token.test.sh`, `sudo tests/deploy/install-admin.test.sh`, `sudo tests/deploy/update.test.sh` and `sudo tests/deploy/firewall.test.sh` (Linux; the last three also run without sudo, as `unshare -r`, and the firewall's as `unshare -rn`); a local run the game can submit to is `dotnet run --project src/BS3D.Api --urls http://localhost:5000` with `"server": "http://localhost:5000"` in the game's `Settings.json`.
+See `CLAUDE.md`. What the service answers is contract v1 (BS3D#542), plus `GET /v1/boards` since #7, the summary of every board the game's High Scores screen asks for, and since #8 unfinished attempts (0 stars), ranked below every clear and shown only for a player who has never cleared the board. `dotnet test BS3D.Api.slnx`, and for the deploy scripts `shellcheck deploy/*.sh tests/deploy/*.sh`, `sudo tests/deploy/tunnel-token.test.sh`, `sudo tests/deploy/install-admin.test.sh`, `sudo tests/deploy/update.test.sh`, `sudo tests/deploy/firewall.test.sh`, `sudo tests/deploy/backup.test.sh` and `sudo tests/deploy/backup-card.test.sh` (Linux; all but the first also run without sudo, as `unshare -r`, and the firewall's as `unshare -rn`); a local run the game can submit to is `dotnet run --project src/BS3D.Api --urls http://localhost:5000` with `"server": "http://localhost:5000"` in the game's `Settings.json`.

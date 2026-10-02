@@ -27,6 +27,7 @@ public static partial class AdminPages
         Markup backup = o.NewestBackup is { } b
             ? Html.M($"<strong>{Ago(now - b.Written)}</strong><small>{b.Name} · {Size(b.Bytes)}</small>")
             : Html.M($"<strong>none</strong><small>none found next to the database</small>");
+        (Markup offBox, Markup offBoxWarning) = OffBoxCopy(o.LastOffBox, now);
 
         Dictionary<string, AdminData.Day> byDate = o.Days.ToDictionary(d => d.Date);
         Markup days = Html.Join(Enumerable.Range(0, AdminData.Days).Select(i =>
@@ -41,12 +42,13 @@ public static partial class AdminPages
             : Html.Join(o.Refusals.Select(r => Html.M($"<tr><td>{r.Date}</td><td>{r.Reason}</td><td class=\"n\">{r.Count}</td></tr>")));
 
         return Layout("Overview", Html.M($"""
-            {warning}
+            {warning}{offBoxWarning}
             <div class="stats">
             <div class="stat"><span>Players</span><strong>{o.Players}</strong><small>{o.HiddenPlayers} hidden</small></div>
             <div class="stat"><span>Accepted</span><strong>{o.Submissions}</strong><small>{o.Unfinished} unfinished · {o.HiddenSubmissions} by hidden players</small></div>
             <div class="stat"><span>Database</span><strong>{Size(o.DatabaseBytes)}</strong><small>schema {o.SchemaVersion}</small></div>
             <div class="stat"><span>Newest backup</span>{backup}</div>
+            <div class="stat"><span>Off the box</span>{offBox}</div>
             </div>
             <div class="cols">
             <section><h2>The last {AdminData.Days} days (UTC)</h2>
@@ -55,6 +57,31 @@ public static partial class AdminPages
             <div class="panel"><table><tr><th>Day</th><th>Reason</th><th class="n">Count</th></tr>{refusals}</table></div></section>
             </div>
             """), refresh: false);
+    }
+
+    /// <summary>A copy off the box older than this is warned about: the backup runs nightly, so one missed night is not.</summary>
+    internal static readonly TimeSpan OffBoxStale = TimeSpan.FromDays(2);
+
+    /// <summary>
+    /// The off-box copy (#6) as <c>last-offbox</c> records it: its stat, and a warning when there is none, the last run
+    /// failed or the newest good copy is older than <see cref="OffBoxStale"/>, because every copy on this disk goes with it.
+    /// </summary>
+    private static (Markup Stat, Markup Warning) OffBoxCopy(AdminData.OffBox? off, DateTimeOffset now)
+    {
+        string Age(DateTimeOffset? at) => at is { } t ? Ago(now - t) : "never";
+        Markup good = off?.Ok is { } last ? Html.M($"The newest good copy is from {Ago(now - last)}") : Html.M($"There is no good copy yet");
+        return off switch
+        {
+            null => (Html.M($"<strong>no record</strong><small>no backup has run since backup.sh records one</small>"), default),
+            { Result: "none" } => (Html.M($"<strong>none</strong><small>not set up: every copy is on this disk</small>"),
+                Html.M($"<p class=\"warn\">Every backup is on this Pi's own disk, and a dead disk takes them all. Set up the card: <code>sudo /opt/bs3d-api/current/deploy/backup-card.sh /dev/mmcblk0</code></p>")),
+            { Result: "ok" } when off.Ok is { } ok && now - ok <= OffBoxStale =>
+                (Html.M($"<strong>{Ago(now - ok)}</strong><small>{off.Copy ?? ""}</small>"), default),
+            { Result: "ok" } => (Html.M($"<strong>{Age(off.Ok)}</strong><small>{off.Copy ?? ""}</small>"),
+                Html.M($"<p class=\"warn\">The newest copy off the box is from {Age(off.Ok)}: is the backup timer running? <code>systemctl status bs3d-api-backup.timer</code></p>")),
+            _ => (Html.M($"<strong>failed</strong><small>{Age(off.Attempt)}: {off.Detail}</small>"),
+                Html.M($"<p class=\"warn\">The last copy off the box failed {Age(off.Attempt)}: {off.Detail}. {good}.</p>")),
+        };
     }
 
     public static string Live(IReadOnlyList<AdminData.Event> events) =>
