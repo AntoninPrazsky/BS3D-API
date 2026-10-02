@@ -2,6 +2,7 @@
 # Tests deploy/firewall.sh (issue #4) as root against a scratch folder, with stand-ins for ip (a home network to read),
 # systemctl and systemd-run, and for nft: it records what it is asked, except a check (-c), which the real nft makes,
 # so the rules the script writes are the ones nft is shown, and nothing is ever loaded into the machine running this.
+# Then its behaviour, end to end: firewall-lab.sh runs it with the real ip and nft in a network namespace of its own.
 # CI runs it with sudo; on the Pi, where root is not needed for anything it touches: unshare -rn tests/deploy/firewall.test.sh
 set -euo pipefail
 
@@ -54,7 +55,7 @@ run() {
     : > "$STUB_LOG"
     rm -f "$work/checked"
     set +e
-    env PATH="$work/bin:$PATH" NFT_CONF="$work/etc/nftables.conf" STUB_CHECKED="$work/checked" "$@" \
+    env PATH="$work/bin:$PATH" NFT_CONF="$work/etc/nftables.conf" STUB_CHECKED="$work/checked" WARMUP_SECONDS=0 "$@" \
         bash "$repo/deploy/firewall.sh" "${args[@]}" > "$work/out" 2>&1
     status=$?
     set -e
@@ -79,6 +80,7 @@ if cmp -s "$conf" "$work/checked" && "$real_nft" --version > /dev/null; then pas
 if grep -q "policy drop" "$conf" && [[ "$(stat -c '%a %U' "$conf")" == "644 root" ]]; then pass "/etc/nftables.conf drops by default, root's, 0644"; else fail "the file: $(stat -c '%a %U' "$conf")"; fi
 if [[ "$(cat "$conf.before-bs3d")" == "$original" ]]; then pass "the distribution's file is kept aside"; else fail "the old file is not kept aside"; fi
 if [[ -n "$(at "systemd-run")" && "$(at "systemd-run")" -lt "$(at "nft -f $conf")" ]] && grep -q "systemd-run --quiet --on-active=180s --unit=bs3d-firewall-undo .*nft flush ruleset" "$STUB_LOG"; then pass "the undo is armed before the rules load"; else fail "the undo: $(cat "$STUB_LOG")"; fi
+if [[ -n "$(at "warmup.nft")" && "$(at "systemd-run")" -lt "$(at "warmup.nft")" && "$(at "warmup.nft")" -lt "$(at "nft -f $conf")" ]]; then pass "conntrack watches with nothing dropped before the rules load"; else fail "the warm-up: $(cat "$STUB_LOG")"; fi
 if grep -q -- "--confirm" "$work/out"; then pass "it says how to confirm"; else fail "it says how to confirm"; fi
 
 run ""
@@ -98,6 +100,14 @@ if [[ $status -eq 0 && "$(cat "$conf")" == "$original" && ! -e "$conf.before-bs3
 
 run --force
 if [[ $status -eq 2 ]]; then pass "refuses an unknown argument"; else fail "refuses an unknown argument ($status)"; fi
+
+# --- Behaviour, end to end: the script with the real ip and nft, in a network namespace of its own
+mkdir -p "$work/labbin"
+cp "$work/bin/systemctl" "$work/bin/systemd-run" "$work/labbin/"
+while IFS= read -r line; do
+    echo "$line"
+    if [[ $line == FAIL* ]]; then failures=$((failures + 1)); fi
+done < <(STUB_LOG="$work/lab-calls" unshare -n bash "$repo/tests/deploy/firewall-lab.sh" "$repo" "$work/labbin" 2>&1)
 
 echo
 if (( failures > 0 )); then echo "$failures failure(s)"; exit 1; fi

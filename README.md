@@ -137,7 +137,9 @@ What this Pi has beyond a fresh Raspberry Pi OS, each with its check:
   - DHCP answers;
   - the answers to what the Pi asked for itself, the tunnel included.
 
-  Nothing is forwarded, and outbound is free. `deploy/firewall.sh` writes `/etc/nftables.conf` from `deploy/nftables.conf`, filling in the prefixes of the network the default route leaves by. It checks the result with `nft -c` and arms an undo before loading it:
+  Nothing is forwarded, and outbound is free. `deploy/firewall.sh` writes `/etc/nftables.conf` from `deploy/nftables.conf`, filling in the prefixes of the network the default route leaves by. It checks the result with `nft -c` and arms an undo before loading it.
+
+  Connections already open (the tunnel, an SSH or VNC login, Claude Code) are new to the kernel's connection tracking at that moment. So for 5 seconds the script lets conntrack watch them while nothing is dropped, and only then do the rules take over, finding them established. Loaded straight away, as v0.1.14 loaded them on 2026-10-02, the rules cut them: the tunnel lost every connection for about 7 minutes, and Claude Code on the Pi could not reach its API.
   ```bash
   sudo /opt/bs3d-api/current/deploy/firewall.sh              # load, flushed again in 3 minutes unless confirmed
   sudo /opt/bs3d-api/current/deploy/firewall.sh --confirm    # from a NEW SSH login: keep, and load at every boot
