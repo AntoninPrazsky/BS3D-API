@@ -23,13 +23,16 @@ jobs:
         run: dotnet test BS3D.Api.slnx --no-build
 
       # What root runs on the Pi (issues #3, #4, #5): every script through shellcheck, and the tunnel-token script, the
-      # admin page's launcher and the update against stand-ins
+      # admin page's launcher, the update and the firewall against stand-ins. The firewall's test checks its rules with
+      # the real nft, in a network namespace of its own, so the runner's own firewall is never touched.
       - name: Deploy scripts
         run: |
+          command -v nft > /dev/null || sudo apt-get install -y -qq nftables > /dev/null
           shellcheck deploy/*.sh tests/deploy/*.sh
           sudo tests/deploy/tunnel-token.test.sh
           sudo tests/deploy/install-admin.test.sh
           sudo tests/deploy/update.test.sh
+          sudo tests/deploy/firewall.test.sh
 
       # The target the Pi runs, published on every push so a change that breaks it is caught here and not on the box
       - name: Publish for linux-arm64
