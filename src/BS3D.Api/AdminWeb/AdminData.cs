@@ -84,9 +84,16 @@ public sealed partial class AdminData(AdminWebOptions options)
         using (SqliteDataReader r = cmd.ExecuteReader())
             while (r.Read())
                 events.Add(new Event(Time(r.GetString(0)), false, $"{r.GetInt32(1)} {r.GetString(2)}",
-                    $"{r.GetString(3)} {r.GetString(4)}: {r.GetString(5)}".Trim()));
+                    $"{r.GetString(3)} {r.GetString(4)}: {Shown(r.GetString(5))}".Trim()));
         return events.OrderByDescending(e => e.At).Take(count).ToList();
     }
+
+    /// <summary>
+    /// A refusal's detail as the page may show it. A rate-limited address is named in the log by the salted hash the
+    /// audit column keeps, so the owner can match it up in the database; the page shows no address hash at all.
+    /// </summary>
+    private static string Shown(string detail) =>
+        detail.StartsWith("address ", StringComparison.Ordinal) ? "an address (its hash is not shown)" : detail;
 
     private Backup? NewestBackup()
     {
