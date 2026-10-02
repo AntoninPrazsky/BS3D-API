@@ -16,12 +16,14 @@ public static partial class AdminPages
           --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Cantarell, "Helvetica Neue", Arial, sans-serif;
           --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, monospace;
           --radius: 10px; --shadow: 0 1px 2px rgb(15 23 42 / .05), 0 2px 8px rgb(15 23 42 / .04);
+          --c1: #1b6bd6; --c2: #d18310; --c3: #17784c; --c4: #c0352b; --c5: #7653d1; --c6: #8994a1;
         }
         @media (prefers-color-scheme: dark) {
           :root {
             --bg: #0e1218; --surface: #151a22; --raised: #1b222c; --fg: #e3e8ee; --muted: #97a3b1; --faint: #6b7785;
             --line: #252d38; --line-strong: #344050; --accent: #6eabff; --accent-soft: #172a46;
             --ok: #62d293; --ok-soft: #13291e; --bad: #ff847b; --bad-soft: #321a1b; --shadow: none;
+            --c1: #6eabff; --c2: #f0b44c; --c3: #62d293; --c4: #ff847b; --c5: #b59cff; --c6: #6b7785;
           }
         }
         *, *::before, *::after { box-sizing: border-box; }
@@ -79,6 +81,33 @@ public static partial class AdminPages
         .stat small { color: var(--muted); font-size: .8rem; overflow-wrap: anywhere; }
         .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)); gap: 0 1.5rem; align-items: start; }
 
+        .ranges { display: inline-flex; margin-bottom: 1rem; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; }
+        .ranges a, .ranges span { padding: .35rem .85rem; font-size: .85rem; font-weight: 500; }
+        .ranges a + a, .ranges a + span, .ranges span + a { border-left: 1px solid var(--line-strong); }
+        .ranges a { color: var(--muted); background: var(--surface); }
+        .ranges a:hover { color: var(--fg); text-decoration: none; }
+        .ranges span { color: var(--accent); background: var(--accent-soft); }
+        .chart-panel { padding: .75rem .75rem .5rem; }
+        svg.chart { display: block; width: 100%; height: auto; }
+        svg.chart .grid { stroke: var(--line); stroke-width: 1; }
+        svg.chart text { font-family: var(--sans); font-size: 11px; fill: var(--muted); }
+        svg.chart text.y { text-anchor: end; }
+        svg.chart text.x { text-anchor: middle; }
+        svg.chart text.x.last { text-anchor: end; }
+        svg.chart .c1 { fill: var(--c1); } svg.chart .c2 { fill: var(--c2); } svg.chart .c3 { fill: var(--c3); }
+        svg.chart .c4 { fill: var(--c4); } svg.chart .c5 { fill: var(--c5); } svg.chart .c6 { fill: var(--c6); }
+        svg.chart polyline.line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+        svg.chart .line.c1 { stroke: var(--c1); } svg.chart .line.c2 { stroke: var(--c2); } svg.chart .line.c3 { stroke: var(--c3); }
+        svg.chart .line.c4 { stroke: var(--c4); } svg.chart .line.c5 { stroke: var(--c5); } svg.chart .line.c6 { stroke: var(--c6); }
+        svg.chart rect:hover, svg.chart circle:hover { opacity: .75; }
+        .legend { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin: .5rem 0 0; padding: 0 .25rem; list-style: none; font-size: .8rem; color: var(--muted); }
+        .swatch { display: inline-block; width: .7rem; height: .7rem; margin-right: .4rem; border-radius: 3px; vertical-align: -.05rem; }
+        .swatch.c1 { background: var(--c1); } .swatch.c2 { background: var(--c2); } .swatch.c3 { background: var(--c3); }
+        .swatch.c4 { background: var(--c4); } .swatch.c5 { background: var(--c5); } .swatch.c6 { background: var(--c6); }
+        details.numbers { margin: .5rem .25rem .25rem; font-size: .85rem; }
+        details.numbers summary { cursor: pointer; color: var(--muted); }
+        details.numbers table { margin-top: .4rem; }
+
         .chip, .flag { display: inline-block; padding: .1rem .5rem; border-radius: 999px; font-size: .72rem; font-weight: 600; line-height: 1.45; letter-spacing: .02em; }
         .chip.ok { color: var(--ok); background: var(--ok-soft); }
         .chip.bad, .flag { color: var(--bad); background: var(--bad-soft); }
@@ -96,6 +125,8 @@ public static partial class AdminPages
           .bar, main { padding-left: 1rem; padding-right: 1rem; }
           .bar { gap: .35rem .75rem; }
           nav { order: 3; width: 100%; }
+          nav a { padding: .35rem .55rem; }
+          svg.chart text { font-size: 17px; }
           main { padding-top: 1.4rem; }
           h1 { font-size: 1.4rem; margin-bottom: 1.1rem; }
           h2 { margin-top: 1.75rem; }

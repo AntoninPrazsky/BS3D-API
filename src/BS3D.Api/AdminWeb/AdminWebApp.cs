@@ -118,6 +118,7 @@ public static class AdminWebApp
         });
         app.MapGet("/", (AdminData data) => Results.Content(AdminPages.Overview(data.ReadOverview(), options.Clock.GetUtcNow()), "text/html; charset=utf-8"));
         app.MapGet("/live", (AdminData data) => Results.Content(AdminPages.Live(data.ReadLive(100)), "text/html; charset=utf-8"));
+        app.MapGet("/charts", (AdminData data, string? range) => Results.Content(AdminPages.Charts(data.ReadCharts(range)), "text/html; charset=utf-8"));
         app.MapGet("/boards", (AdminData data) =>
         {
             Ceilings ceilings = data.LoadCeilings();
