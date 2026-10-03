@@ -17,6 +17,9 @@ public static partial class AdminPages
     private const double ChartWidth = 560, ChartHeight = 200, Left = 44, Right = 8, Top = 10, Bottom = 24;
     private const double PlotWidth = ChartWidth - Left - Right, PlotHeight = ChartHeight - Top - Bottom;
 
+    /// <summary>The widest a bar is drawn, so that a few days' bars stay bars rather than blocks.</summary>
+    private const double MaxBarWidth = 28;
+
     /// <summary>The most day labels under a chart; the last day always has one.</summary>
     public const int DayLabels = 7;
 
@@ -35,7 +38,7 @@ public static partial class AdminPages
 
         return Layout("Charts", Html.M($"""
             <div class="ranges">{Range("14d", "14 days")}{Range("90d", "90 days")}{Range("all", "All")}</div>
-            <p class="note">One value per UTC day, {d[0]} to {d[^1]}. What the service received, hidden players included: the boards themselves leave hidden players out. A bar or a point shows its number under the pointer, and each chart's numbers are under it.</p>
+            <p class="note">One value per UTC day, {d[0]} to {d[^1]}; no range starts before the first day anything was recorded. What the service received, hidden players included: the boards themselves leave hidden players out. A bar or a point shows its number under the pointer, and each chart's numbers are under it.</p>
             <div class="cols">
             <section><h2>Players, in all</h2>{LineChart("Players in all", d, [new("Players", "c1", Of(ch.PlayersTotal))])}</section>
             <section><h2>Players who played, per day</h2>{BarChart("Players who played per day", d, [new("Returning", "c1", Of(ch.ReturningPlayers)), new("First day", "c3", Of(ch.FirstDayPlayers))], integer: true)}</section>
@@ -53,7 +56,7 @@ public static partial class AdminPages
     {
         int n = days.Count;
         (double top, double step) = Scale(Enumerable.Range(0, n).Select(i => series.Sum(s => s.Values[i])).DefaultIfEmpty(0).Max(), integer);
-        double slot = PlotWidth / n, width = Math.Max(1, slot * 0.72);
+        double slot = PlotWidth / n, width = Math.Clamp(slot * 0.72, 1, MaxBarWidth);
         List<Markup> bars = new();
         for (int i = 0; i < n; i++)
         {

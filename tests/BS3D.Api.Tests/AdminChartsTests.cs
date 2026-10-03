@@ -71,7 +71,7 @@ public sealed class AdminChartsTests
     }
 
     [Fact]
-    public async Task All_starts_on_the_first_day_anything_was_recorded_and_an_unknown_range_is_ninety_days()
+    public async Task No_range_starts_before_the_first_day_anything_was_recorded_and_an_unknown_range_is_ninety_days()
     {
         await using AdminPage page = await Seeded();
         AdminData data = new(page.Options);
@@ -81,11 +81,13 @@ public sealed class AdminChartsTests
         Assert.Equal((1, 3, 4), (all.PlayersTotal[0], all.PlayersTotal[^1], all.ClearsTotal[^1]));
         Assert.Equal(10, all.Refusals[0].Counts.Sum());
 
+        // 90 days back from 09-15 is 06-18, before anything was recorded: the range starts on 08-01 as "all" does
         foreach (string? range in new[] { null, "", "7d", "90d' OR 1=1 --" })
         {
             AdminData.Charts ch = data.ReadCharts(range);
-            Assert.Equal(("90d", 90, "2026-09-15"), (ch.Range, ch.Days.Count, ch.Days[^1]));
+            Assert.Equal(("90d", "2026-08-01", "2026-09-15"), (ch.Range, ch.Days[0], ch.Days[^1]));
         }
+        Assert.Equal(14, data.ReadCharts("14d").Days.Count);
     }
 
     [Fact]
@@ -135,6 +137,8 @@ public sealed class AdminChartsTests
             [new("Clears", "c1", [2, 4, 0]), new("<b>Unfinished</b>", "c2", [2, 0, 0])], integer: true);
 
         var rects = Rects(chart);
+        // Three days in the whole width: each bar no wider than a bar is ever drawn
+        Assert.All(Regex.Matches(chart.Value, @"<rect [^>]*width=""(?<w>[^""]+)""").Select(m => double.Parse(m.Groups["w"].Value, CultureInfo.InvariantCulture)), w => Assert.True(w <= 28, $"width {w}"));
         // Day 1: 2 and 2 stacked; day 2: 4 alone; day 3: nothing, so no bar
         Assert.Equal(3, rects.Count);
         Assert.Equal(rects[0].Height, rects[1].Height, 6);
