@@ -19,9 +19,21 @@ public sealed partial class AdminData
     /// <summary>A hidden player's best on a board by the boards' rule: their best clear, or their best unfinished attempt if they have none.</summary>
     public sealed record HiddenEntry(Guid Player, string Name, int Score, int Stars, int Clears, int Unfinished);
 
+    /// <param name="Scores">The all-time board's rows by their score's share of the ceiling, when a table names one (#9).</param>
     public sealed record BoardView(BoardKey Key, CeilingRow? Ceiling, string Month,
         IReadOnlyList<BoardEntry> MonthEntries, int MonthTotal, IReadOnlyList<BoardEntry> AllEntries, int AllTotal,
-        IReadOnlyList<HiddenEntry> Hidden);
+        IReadOnlyList<HiddenEntry> Hidden, ScoreBins? Scores = null);
+
+    /// <summary>
+    /// A board's rows in tenths of its ceiling, clears and unfinished attempts apart: <c>[0]</c> holds 0 to 10 %, <c>[9]</c>
+    /// 90 % up to the ceiling itself.
+    /// </summary>
+    public sealed record ScoreBins(int[] Clears, int[] Unfinished);
+
+    /// <summary>One level of the funnel (#9), every version of it together.</summary>
+    /// <param name="Cleared">Visible players who cleared it, on any version.</param>
+    /// <param name="Unfinished">Visible players who tried it and never cleared any version: their row on its boards is unfinished.</param>
+    public sealed record FunnelLevel(string File, string Name, string? Chapter, int Cleared, int Unfinished);
 
     public sealed record PlayerRow(Guid Id, string Name, DateTimeOffset Created, bool Hidden, int Clears, int Unfinished,
         DateTimeOffset? LastPlayed, int Addresses, IReadOnlyList<(Guid Id, string Name)> SharesWith);
@@ -135,9 +147,52 @@ public sealed partial class AdminData
 
         int allTotal = boards.Total(c, key, null);
         if (ceiling == null && allTotal == 0 && hidden.Count == 0) return null;
+
+        ScoreBins? bins = null;
+        if (ceiling is { Ceiling: > 0 } row)
+        {
+            bins = new ScoreBins(new int[10], new int[10]);
+            foreach (BoardEntry e in boards.Page(c, key, null, int.MaxValue, 0))
+                (e.Stars > 0 ? bins.Clears : bins.Unfinished)[Math.Clamp((int)((long)e.Score * 10 / row.Ceiling), 0, 9)]++;
+        }
         return new BoardView(key, ceiling, month,
             boards.Page(c, key, month, BoardLimit, 0), boards.Total(c, key, month),
-            boards.Page(c, key, null, BoardLimit, 0), allTotal, hidden);
+            boards.Page(c, key, null, BoardLimit, 0), allTotal, hidden, bins);
+    }
+
+    /// <summary>
+    /// Every level a ceiling table names, in the boards list's order (chapter by chapter, play order within), with how many
+    /// visible players cleared it and how many tried it and never did, every version of it together: where players stop.
+    /// </summary>
+    public IReadOnlyList<FunnelLevel> ReadFunnel(Ceilings ceilings)
+    {
+        using SqliteConnection c = Open();
+        Dictionary<string, (int Cleared, int Unfinished)> counts = new();
+        using (SqliteCommand cmd = c.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT f, SUM(cleared), SUM(1 - cleared) FROM (
+                    SELECT s.level_file AS f, MAX(s.stars > 0) AS cleared
+                    FROM submissions s JOIN players p ON p.id = s.player_id
+                    WHERE p.hidden = 0 GROUP BY s.level_file, s.player_id)
+                GROUP BY f
+                """;
+            using SqliteDataReader r = cmd.ExecuteReader();
+            while (r.Read()) counts[r.GetString(0)] = (r.GetInt32(1), r.GetInt32(2));
+        }
+
+        Dictionary<string, string> names = ceilings.All.GroupBy(row => row.File)
+            .ToDictionary(g => g.Key, g => g.Select(row => row.Name).LastOrDefault(name => name != null) ?? g.Key);
+        var levels = ceilings.Levels.Select(l => (File: l.Key, l.Value.Position, Chapter: l.Value.Block)).ToList();
+        Dictionary<string, int> opens = levels.Where(l => l.Chapter != null).GroupBy(l => l.Chapter!).ToDictionary(g => g.Key, g => g.Min(l => l.Position));
+        return levels
+            .OrderBy(l => l.Chapter is { } chapter ? opens[chapter] : int.MaxValue).ThenBy(l => l.Chapter, StringComparer.Ordinal)
+            .ThenBy(l => l.Position).ThenBy(l => l.File, StringComparer.OrdinalIgnoreCase)
+            .Select(l =>
+            {
+                var n = counts.GetValueOrDefault(l.File);
+                return new FunnelLevel(l.File, names.GetValueOrDefault(l.File, l.File), l.Chapter, n.Cleared, n.Unfinished);
+            }).ToList();
     }
 
     /// <summary>Every player, in one of <see cref="PlayerOrders"/> (an unknown order falls back to the name).</summary>

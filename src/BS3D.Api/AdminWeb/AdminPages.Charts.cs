@@ -13,9 +13,13 @@ public static partial class AdminPages
     /// <summary>One series: its name, its colour class and one value per day.</summary>
     public sealed record ChartSeries(string Name, string Colour, IReadOnlyList<double> Values);
 
-    // The drawing's own units: the SVG scales to the panel's width, so these are proportions, not pixels
-    private const double ChartWidth = 560, ChartHeight = 200, Left = 44, Right = 8, Top = 10, Bottom = 24;
-    private const double PlotWidth = ChartWidth - Left - Right, PlotHeight = ChartHeight - Top - Bottom;
+    // The drawing's own units: the SVG scales to the panel's width, so these are proportions, not pixels. A chart across
+    // the whole page is drawn twice as wide rather than scaled up, so that its text stays the size of the others'
+    private const double NarrowWidth = 560, WideWidth = 1120, ChartHeight = 200, Left = 44, Right = 8, Top = 10, Bottom = 24;
+    private const double PlotHeight = ChartHeight - Top - Bottom;
+
+    /// <summary>The widest a bar is drawn, so that a few days' bars stay bars rather than blocks.</summary>
+    private const double MaxBarWidth = 28;
 
     /// <summary>The most day labels under a chart; the last day always has one.</summary>
     public const int DayLabels = 7;
@@ -35,7 +39,7 @@ public static partial class AdminPages
 
         return Layout("Charts", Html.M($"""
             <div class="ranges">{Range("14d", "14 days")}{Range("90d", "90 days")}{Range("all", "All")}</div>
-            <p class="note">One value per UTC day, {d[0]} to {d[^1]}. What the service received, hidden players included: the boards themselves leave hidden players out. A bar or a point shows its number under the pointer, and each chart's numbers are under it.</p>
+            <p class="note">One value per UTC day, {d[0]} to {d[^1]}; no range starts before the first day anything was recorded. What the service received, hidden players included: the boards themselves leave hidden players out. A bar or a point shows its number under the pointer, and each chart's numbers are under it.</p>
             <div class="cols">
             <section><h2>Players, in all</h2>{LineChart("Players in all", d, [new("Players", "c1", Of(ch.PlayersTotal))])}</section>
             <section><h2>Players who played, per day</h2>{BarChart("Players who played per day", d, [new("Returning", "c1", Of(ch.ReturningPlayers)), new("First day", "c3", Of(ch.FirstDayPlayers))], integer: true)}</section>
@@ -48,12 +52,78 @@ public static partial class AdminPages
             """), refresh: false);
     }
 
-    /// <summary>Stacked bars, one per day, the series bottom to top in the order given.</summary>
-    public static Markup BarChart(string label, IReadOnlyList<string> days, IReadOnlyList<ChartSeries> series, bool integer)
+    /// <summary>
+    /// A chart's x axis: each slot's key, named in its bars' titles and the numbers table, the table's first heading,
+    /// what is drawn under the plot for a chart of a given width, what stands under the legend, whether the table lists
+    /// the last slot first, and whether the chart spans the page.
+    /// </summary>
+    public sealed record XAxis(IReadOnlyList<string> Keys, string Heading, Func<double, Markup> Labels, Markup Key, bool LastFirst, bool Wide = false)
     {
-        int n = days.Count;
+        public double Width => Wide ? WideWidth : NarrowWidth;
+    }
+
+    /// <summary>One slot per UTC day: at most <see cref="DayLabels"/> labels, the last day's ending at the right edge.</summary>
+    public static XAxis DayAxis(IReadOnlyList<string> days)
+    {
+        int n = days.Count, every = Math.Max(1, (int)Math.Ceiling(n / (double)DayLabels));
+        // The last day's label ends at the right edge rather than centring on its day, where it would be cut off
+        Markup Labels(double width) => Html.Join(Enumerable.Range(0, n).Where(i => (n - 1 - i) % every == 0).Select(i => i == n - 1
+            ? Html.M($"<text class=\"x last\" x=\"{width - 1:0.##}\" y=\"{ChartHeight - 6:0.##}\">{days[i][5..]}</text>")
+            : Html.M($"<text class=\"x\" x=\"{X(i, n, width):0.##}\" y=\"{ChartHeight - 6:0.##}\">{days[i][5..]}</text>")));
+        return new XAxis(days, "Day (UTC)", Labels, default, LastFirst: true);
+    }
+
+    /// <summary>One slot per category, each labelled under its slot.</summary>
+    public static XAxis CategoryAxis(string heading, IReadOnlyList<(string Key, string Label)> categories)
+    {
+        int n = categories.Count;
+        Markup Labels(double width) => Html.Join(categories.Select((c, i) =>
+            Html.M($"<text class=\"x\" x=\"{X(i, n, width):0.##}\" y=\"{ChartHeight - 6:0.##}\">{c.Label}</text>")));
+        return new XAxis(categories.Select(c => c.Key).ToList(), heading, Labels, default, LastFirst: false);
+    }
+
+    /// <summary>
+    /// One slot per level, in play order, across the page. Where the levels name chapters, each chapter is numbered under
+    /// its levels and set off by a line, and the numbers are keyed under the legend: thirteen chapter names would not fit
+    /// under the plot. Without chapters, every tenth level is numbered.
+    /// </summary>
+    public static XAxis LevelAxis(IReadOnlyList<(string Name, string? Chapter)> levels)
+    {
+        int n = levels.Count;
+        List<(string? Chapter, int First, int Last)> runs = new();
+        for (int i = 0; i < n; i++)
+            if (runs.Count > 0 && runs[^1].Chapter == levels[i].Chapter) runs[^1] = runs[^1] with { Last = i };
+            else runs.Add((levels[i].Chapter, i, i));
+
+        if (runs.All(r => r.Chapter == null))
+        {
+            Markup Numbers(double width) => Html.Join(Enumerable.Range(0, n).Where(i => i % 10 == 0).Select(i =>
+                Html.M($"<text class=\"x\" x=\"{X(i, n, width):0.##}\" y=\"{ChartHeight - 6:0.##}\">{i + 1}</text>")));
+            return new XAxis(levels.Select(l => l.Name).ToList(), "Level", Numbers, default, LastFirst: false, Wide: true);
+        }
+
+        Markup Labels(double width)
+        {
+            double slot = (width - Left - Right) / Math.Max(n, 1);
+            return Html.Join(runs.Select((r, k) => Html.M($"""
+                {(k > 0 ? Html.M($"<line class=\"sep\" x1=\"{Left + r.First * slot:0.##}\" x2=\"{Left + r.First * slot:0.##}\" y1=\"{Top:0.##}\" y2=\"{Top + PlotHeight + 4:0.##}\"/>") : default)}<text class="x" x="{(X(r.First, n, width) + X(r.Last, n, width)) / 2:0.##}" y="{ChartHeight - 6:0.##}">{k + 1}</text>
+                """)));
+        }
+        Markup key = Html.M($"<ol class=\"chapters\">{Html.Join(runs.Select((r, k) => Html.M($"<li><b>{k + 1}</b> {r.Chapter ?? "Without a chapter"}</li>")))}</ol>");
+        return new XAxis(levels.Select(l => l.Name).ToList(), "Level", Labels, key, LastFirst: false, Wide: true);
+    }
+
+    /// <summary>Stacked bars, one per day, the series bottom to top in the order given.</summary>
+    public static Markup BarChart(string label, IReadOnlyList<string> days, IReadOnlyList<ChartSeries> series, bool integer) =>
+        BarChart(label, DayAxis(days), series, integer);
+
+    /// <summary>Stacked bars, one per slot of <paramref name="x"/>, the series bottom to top in the order given.</summary>
+    public static Markup BarChart(string label, XAxis x, IReadOnlyList<ChartSeries> series, bool integer)
+    {
+        IReadOnlyList<string> keys = x.Keys;
+        int n = keys.Count;
         (double top, double step) = Scale(Enumerable.Range(0, n).Select(i => series.Sum(s => s.Values[i])).DefaultIfEmpty(0).Max(), integer);
-        double slot = PlotWidth / n, width = Math.Max(1, slot * 0.72);
+        double slot = (x.Width - Left - Right) / Math.Max(n, 1), width = Math.Clamp(slot * 0.72, 1, MaxBarWidth);
         List<Markup> bars = new();
         for (int i = 0; i < n; i++)
         {
@@ -64,10 +134,10 @@ public static partial class AdminPages
                 if (value <= 0) continue;
                 double height = value / top * PlotHeight;
                 y -= height;
-                bars.Add(Html.M($"<rect class=\"{s.Colour}\" x=\"{Left + i * slot + (slot - width) / 2:0.##}\" y=\"{y:0.##}\" width=\"{width:0.##}\" height=\"{height:0.##}\"><title>{days[i]} · {s.Name}: {Number(value, integer)}</title></rect>"));
+                bars.Add(Html.M($"<rect class=\"{s.Colour}\" x=\"{Left + i * slot + (slot - width) / 2:0.##}\" y=\"{y:0.##}\" width=\"{width:0.##}\" height=\"{height:0.##}\"><title>{keys[i]} · {s.Name}: {Number(value, integer)}</title></rect>"));
             }
         }
-        return Chart(label, days, series, top, step, integer, Html.Join(bars));
+        return Chart(label, x, series, top, step, integer, Html.Join(bars));
     }
 
     /// <summary>One line per series, through each day's value, with a point per day.</summary>
@@ -79,12 +149,12 @@ public static partial class AdminPages
         List<Markup> lines = new();
         foreach (ChartSeries s in series)
         {
-            string points = string.Join(" ", Enumerable.Range(0, n).Select(i => string.Create(CultureInfo.InvariantCulture, $"{X(i, n):0.##},{Y(s.Values[i]):0.##}")));
+            string points = string.Join(" ", Enumerable.Range(0, n).Select(i => string.Create(CultureInfo.InvariantCulture, $"{X(i, n, NarrowWidth):0.##},{Y(s.Values[i]):0.##}")));
             lines.Add(Html.M($"<polyline class=\"line {s.Colour}\" points=\"{points}\"/>"));
             lines.AddRange(Enumerable.Range(0, n).Select(i => Html.M(
-                $"<circle class=\"{s.Colour}\" cx=\"{X(i, n):0.##}\" cy=\"{Y(s.Values[i]):0.##}\" r=\"2.5\"><title>{days[i]} · {s.Name}: {Number(s.Values[i], true)}</title></circle>")));
+                $"<circle class=\"{s.Colour}\" cx=\"{X(i, n, NarrowWidth):0.##}\" cy=\"{Y(s.Values[i]):0.##}\" r=\"2.5\"><title>{days[i]} · {s.Name}: {Number(s.Values[i], true)}</title></circle>")));
         }
-        return Chart(label, days, series, top, step, integer: true, Html.Join(lines));
+        return Chart(label, DayAxis(days), series, top, step, integer: true, Html.Join(lines));
     }
 
     /// <summary>
@@ -102,34 +172,30 @@ public static partial class AdminPages
         return (Math.Ceiling(max / step - 1e-9) * step, step);
     }
 
-    /// <summary>The middle of a day's slot: a bar's centre and a line's point fall on the same place in every chart.</summary>
-    private static double X(int i, int n) => Left + (i + 0.5) * PlotWidth / n;
+    /// <summary>The middle of a slot: a bar's centre and a line's point fall on the same place in every chart.</summary>
+    private static double X(int i, int n, double width) => Left + (i + 0.5) * (width - Left - Right) / Math.Max(n, 1);
 
     private static string Number(double value, bool integer) =>
         value.ToString(integer ? "0" : "0.##", CultureInfo.InvariantCulture);
 
-    private static Markup Chart(string label, IReadOnlyList<string> days, IReadOnlyList<ChartSeries> series, double top, double step,
-        bool integer, Markup plot)
+    private static Markup Chart(string label, XAxis x, IReadOnlyList<ChartSeries> series, double top, double step, bool integer, Markup plot)
     {
-        int n = days.Count;
+        int n = x.Keys.Count;
+        double chartWidth = x.Width;
         Markup grid = Html.Join(Enumerable.Range(0, (int)Math.Round(top / step) + 1).Select(k =>
         {
             double value = k * step, y = Top + PlotHeight - value / top * PlotHeight;
-            return Html.M($"<line class=\"grid\" x1=\"{Left:0.##}\" x2=\"{ChartWidth - Right:0.##}\" y1=\"{y:0.##}\" y2=\"{y:0.##}\"/><text class=\"y\" x=\"{Left - 6:0.##}\" y=\"{y + 4:0.##}\">{Number(value, integer)}</text>");
+            return Html.M($"<line class=\"grid\" x1=\"{Left:0.##}\" x2=\"{chartWidth - Right:0.##}\" y1=\"{y:0.##}\" y2=\"{y:0.##}\"/><text class=\"y\" x=\"{Left - 6:0.##}\" y=\"{y + 4:0.##}\">{Number(value, integer)}</text>");
         }));
-        int every = Math.Max(1, (int)Math.Ceiling(n / (double)DayLabels));
-        // The last day's label ends at the right edge rather than centring on its day, where it would be cut off
-        Markup labels = Html.Join(Enumerable.Range(0, n).Where(i => (n - 1 - i) % every == 0).Select(i => i == n - 1
-            ? Html.M($"<text class=\"x last\" x=\"{ChartWidth - 1:0.##}\" y=\"{ChartHeight - 6:0.##}\">{days[i][5..]}</text>")
-            : Html.M($"<text class=\"x\" x=\"{X(i, n):0.##}\" y=\"{ChartHeight - 6:0.##}\">{days[i][5..]}</text>")));
         Markup legend = Html.Join(series.Select(s => Html.M($"<li><span class=\"swatch {s.Colour}\"></span>{s.Name}</li>")));
         Markup head = Html.Join(series.Select(s => Html.M($"<th class=\"n\">{s.Name}</th>")));
-        Markup rows = Html.Join(Enumerable.Range(0, n).Reverse().Select(i => Html.M(
-            $"<tr><td>{days[i]}</td>{Html.Join(series.Select(s => Html.M($"<td class=\"n\">{Number(s.Values[i], integer)}</td>")))}</tr>")));
+        IEnumerable<int> order = x.LastFirst ? Enumerable.Range(0, n).Reverse() : Enumerable.Range(0, n);
+        Markup rows = Html.Join(order.Select(i => Html.M(
+            $"<tr><td>{x.Keys[i]}</td>{Html.Join(series.Select(s => Html.M($"<td class=\"n\">{Number(s.Values[i], integer)}</td>")))}</tr>")));
         return Html.M($"""
-            <div class="panel chart-panel"><svg class="chart" viewBox="0 0 {ChartWidth:0} {ChartHeight:0}" role="img" aria-label="{label}"><title>{label}</title>{grid}{plot}{labels}</svg>
-            <ul class="legend">{legend}</ul>
-            <details class="numbers"><summary>The numbers</summary><table><tr><th>Day (UTC)</th>{head}</tr>{rows}</table></details></div>
+            <div class="panel chart-panel"><svg class="{(x.Wide ? "chart wide" : "chart")}" viewBox="0 0 {chartWidth:0} {ChartHeight:0}" role="img" aria-label="{label}"><title>{label}</title>{grid}{plot}{x.Labels(chartWidth)}</svg>
+            <ul class="legend">{legend}</ul>{x.Key}
+            <details class="numbers"><summary>The numbers</summary><table><tr><th>{x.Heading}</th>{head}</tr>{rows}</table></details></div>
             """);
     }
 }

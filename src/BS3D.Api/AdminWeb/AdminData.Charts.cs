@@ -21,7 +21,10 @@ public sealed partial class AdminData
         int[] PlayersTotal, int[] ClearsTotal, int[] UnfinishedTotal, int[] BoardsCleared,
         IReadOnlyList<(string Reason, int[] Counts)> Refusals);
 
-    /// <summary>The charts' ranges, in days (0: from the first day anything was recorded). A fixed set, so a query string never reaches the SQL.</summary>
+    /// <summary>
+    /// The charts' ranges, in days (0: from the first day anything was recorded, where every range starts at the latest).
+    /// A fixed set, so a query string never reaches the SQL.
+    /// </summary>
     public static readonly IReadOnlyDictionary<string, int> ChartRanges = new Dictionary<string, int> { ["14d"] = 14, ["90d"] = 90, ["all"] = 0 };
 
     public const string DefaultChartRange = "90d";
@@ -34,7 +37,10 @@ public sealed partial class AdminData
         range = range != null && ChartRanges.ContainsKey(range) ? range : DefaultChartRange;
         using SqliteConnection c = Open();
         DateTime today = options.Clock.GetUtcNow().UtcDateTime.Date;
-        DateTime first = ChartRanges[range] > 0 ? today.AddDays(1 - ChartRanges[range]) : FirstDay(c) ?? today;
+        // No range starts before the first day anything was recorded: the days before it are the service not yet running,
+        // and drawn as zeros they would squeeze a young service's real days against the right edge
+        DateTime start = FirstDay(c) ?? today;
+        DateTime first = ChartRanges[range] > 0 && today.AddDays(1 - ChartRanges[range]) > start ? today.AddDays(1 - ChartRanges[range]) : start;
         if ((today - first).TotalDays >= MaxChartDays) first = today.AddDays(1 - MaxChartDays);
         string from = DayText(first);
         List<string> days = Enumerable.Range(0, (int)(today - first).TotalDays + 1).Select(i => DayText(first.AddDays(i))).ToList();

@@ -123,7 +123,7 @@ public static class AdminWebApp
         {
             Ceilings ceilings = data.LoadCeilings();
             return Page(AdminPages.Boards(data.ReadBoards(ceilings), ScoreStore.MonthOf(options.Clock.GetUtcNow()),
-                ceilings.Count == 0 ? Path.GetFullPath(options.CeilingsDirectory) : null));
+                ceilings.Count == 0 ? Path.GetFullPath(options.CeilingsDirectory) : null, data.ReadFunnel(ceilings)));
         });
         app.MapGet("/board", (AdminData data, string? file, string? hash, int? rules) =>
             file is { Length: > 0 } && hash is { Length: > 0 } && rules is int r && data.ReadBoard(new BoardKey(file, hash, r), data.LoadCeilings()) is { } board
