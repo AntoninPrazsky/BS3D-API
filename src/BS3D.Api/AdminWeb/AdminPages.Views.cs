@@ -6,8 +6,16 @@ namespace BS3D.Api.AdminWeb;
 public static partial class AdminPages
 {
     /// <param name="noTables">The ceilings directory, when no table was read from it: then every board is "in no ceiling table".</param>
-    public static string Boards(IReadOnlyList<AdminData.BoardRow> boards, string month, string? noTables = null)
+    /// <param name="funnel">Every named level's players (#9), drawn above the list when there is one.</param>
+    public static string Boards(IReadOnlyList<AdminData.BoardRow> boards, string month, string? noTables = null,
+        IReadOnlyList<AdminData.FunnelLevel>? funnel = null)
     {
+        Markup chart = funnel is not { Count: > 0 } ? default : Html.M($"""
+            <h2>Players per level, all time</h2>
+            {BarChart("Players per level, all time", LevelAxis(funnel.Select(l => (l.Name, l.Chapter)).ToList()),
+                [new("Cleared", "c1", funnel.Select(l => (double)l.Cleared).ToList()), new("Not cleared yet", "c2", funnel.Select(l => (double)l.Unfinished).ToList())], integer: true)}
+            <p class="note">Each level once, its versions together, in the order of the list below: where the bars drop is where players stop. Hidden players are not counted. "Not cleared yet" is a player who tried the level and never cleared it.</p>
+            """);
         int unknown = boards.Count(b => !b.Known);
         Markup missing = noTables == null ? default
             : Html.M($"<p class=\"warn\">No ceiling table in <code>{noTables}</code> (Scores__CeilingsDirectory): only the boards with submissions are listed.</p>");
@@ -22,7 +30,7 @@ public static partial class AdminPages
             <td class="n">{b.Shots}</td><td class="n">{b.MonthPlayers}</td><td class="n">{b.AllPlayers}</td><td class="n">{b.Clears}</td><td class="n">{b.Unfinished}</td><td class="t">{Stamp(b.LastPlayed)}</td></tr>
             """)));
         return Layout("Boards", Html.M($"""
-            {missing}<p class="note">{boards.Count} boards: every board a ceiling table names{(unknown > 0 ? Html.M($", and {unknown} with submissions that no table names") : default)}, {(chaptered ? "chapter by chapter in play order" : "in play order (the tables name no chapters)")}. Players are the rows of the game's boards: each visible player once, hidden players not counted, and an unfinished attempt only for a player who has never cleared the board. Clears and unfinished attempts count every one sent.</p>
+            {missing}{chart}<h2>Boards</h2><p class="note">{boards.Count} boards: every board a ceiling table names{(unknown > 0 ? Html.M($", and {unknown} with submissions that no table names") : default)}, {(chaptered ? "chapter by chapter in play order" : "in play order (the tables name no chapters)")}. Players are the rows of the game's boards: each visible player once, hidden players not counted, and an unfinished attempt only for a player who has never cleared the board. Clears and unfinished attempts count every one sent.</p>
             <div class="panel"><table><tr><th>Level</th><th>Board</th><th class="n">Ceiling</th><th class="n">Shots</th><th class="n">Players {month}</th><th class="n">Players all time</th><th class="n">Clears</th><th class="n">Unfinished</th><th>Last played (UTC)</th></tr>{rows}</table></div>
             """), refresh: false);
     }
@@ -50,12 +58,28 @@ public static partial class AdminPages
         return Layout(b.Ceiling?.Name ?? b.Key.File, Html.M($"""
             <p><code class="key">{b.Key.File}#{b.Key.Hash} r{b.Key.Rules}</code> {ceiling}</p>
             <p class="note">As the game sees it (the same query as <code>GET /v1/boards</code>): each visible player's best clear, or, for a player who has never cleared this board, their best unfinished attempt; every clear above every unfinished attempt, ties to the earlier.</p>
+            {ScoreChart(b)}
             <div class="cols">
             <section><h2>{b.Month} ({b.MonthTotal})</h2>{Entries(b.MonthEntries, b.MonthTotal)}</section>
             <section><h2>All time ({b.AllTotal})</h2>{Entries(b.AllEntries, b.AllTotal)}</section>
             </div>
             {hidden}
             """), refresh: false, section: "Boards");
+    }
+
+    /// <summary>The all-time board's rows by their score's share of the ceiling (#9): a cluster near the top is the ceiling met, or probed.</summary>
+    private static Markup ScoreChart(AdminData.BoardView b)
+    {
+        if (b.Scores is not { } bins || b.AllTotal == 0) return default;
+        var tenths = Enumerable.Range(0, 10).Select(i => ($"{i * 10}–{(i + 1) * 10} %", $"{i * 10}")).ToList();
+        return Html.M($"""
+            <div class="cols">
+            <section><h2>Best scores against the ceiling, all time</h2>
+            {BarChart("Best scores against the ceiling", CategoryAxis("Share of the ceiling", tenths),
+                [new("Clears", "c1", bins.Clears.Select(n => (double)n).ToList()), new("Unfinished", "c2", bins.Unfinished.Select(n => (double)n).ToList())], integer: true)}</section>
+            <section><h2>What it shows</h2><p class="note">Each player's row on the all-time board, by its score as a share of the ceiling, {b.Ceiling!.Ceiling.ToString("N0", CultureInfo.InvariantCulture)}, in tenths: 30 is 30 to 40 %, and the last tenth runs up to the ceiling itself. Many rows near the top mean the ceiling is close to what players make, or that someone is probing it.</p></section>
+            </div>
+            """);
     }
 
     public static string Players(IReadOnlyList<AdminData.PlayerRow> players, string order)

@@ -100,6 +100,11 @@ public static partial class AdminPages
         svg.chart .line.c1 { stroke: var(--c1); } svg.chart .line.c2 { stroke: var(--c2); } svg.chart .line.c3 { stroke: var(--c3); }
         svg.chart .line.c4 { stroke: var(--c4); } svg.chart .line.c5 { stroke: var(--c5); } svg.chart .line.c6 { stroke: var(--c6); }
         svg.chart rect:hover, svg.chart circle:hover { opacity: .75; }
+        /* A chart across the page keeps its text legible on a phone by scrolling sideways in its panel, as tables do */
+        svg.chart.wide { min-width: 44rem; }
+        svg.chart .sep { stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+        ol.chapters { display: flex; flex-wrap: wrap; gap: .15rem 1rem; margin: .4rem 0 0; padding: 0 .25rem; list-style: none; font-size: .78rem; color: var(--muted); }
+        ol.chapters b { color: var(--fg); font-family: var(--mono); font-weight: 600; }
         .legend { display: flex; flex-wrap: wrap; gap: .25rem 1rem; margin: .5rem 0 0; padding: 0 .25rem; list-style: none; font-size: .8rem; color: var(--muted); }
         .swatch { display: inline-block; width: .7rem; height: .7rem; margin-right: .4rem; border-radius: 3px; vertical-align: -.05rem; }
         .swatch.c1 { background: var(--c1); } .swatch.c2 { background: var(--c2); } .swatch.c3 { background: var(--c3); }

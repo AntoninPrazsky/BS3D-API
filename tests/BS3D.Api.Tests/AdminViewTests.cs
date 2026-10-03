@@ -106,6 +106,73 @@ public sealed class AdminViewTests
     }
 
     [Fact]
+    public async Task The_funnel_counts_each_level_once_with_its_versions_by_chapter_and_leaves_hidden_players_out()
+    {
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            Guid ann = AdminPage.AddPlayer(store, c, now, "Ann");
+            AdminPage.AddClear(store, c, now, ann, 100, board: new BoardKey("Zed.json", "1111111111111111", 1));
+            AdminPage.AddClear(store, c, now, ann, 100, board: new BoardKey("Ann.json", "2222222222222222", 1), stars: 0);
+            // Bob lost an older version of Zed and cleared the newer: he cleared the level
+            Guid bob = AdminPage.AddPlayer(store, c, now, "Bob");
+            AdminPage.AddClear(store, c, now, bob, 100, board: new BoardKey("Zed.json", "9999999999999999", 1), stars: 0);
+            AdminPage.AddClear(store, c, now, bob, 100, board: new BoardKey("Zed.json", "1111111111111111", 1));
+            // Cid lost Ann on two versions: one player who has not cleared it yet
+            Guid cid = AdminPage.AddPlayer(store, c, now, "Cid");
+            AdminPage.AddClear(store, c, now, cid, 100, board: new BoardKey("Ann.json", "2222222222222222", 1), stars: 0);
+            AdminPage.AddClear(store, c, now, cid, 100, board: new BoardKey("Ann.json", "8888888888888888", 1), stars: 0);
+            Guid hid = AdminPage.AddPlayer(store, c, now, "Hid");
+            store.SetHidden(c, hid, true);
+            AdminPage.AddClear(store, c, now, hid, 100, board: new BoardKey("Ann.json", "2222222222222222", 1));
+        });
+        // Cid comes first in play order but names no chapter: after every chapter, as in the list
+        WriteTable(page, "BS3D-dev-abc1234-ceilings.json", Level("Cid.json", "5555555555555555"), Level("Zed.json", "1111111111111111", "The Valley"),
+            Level("Ann.json", "2222222222222222", "The Valley"), Level("Bob.json", "3333333333333333", "The Tower"));
+        await page.LogInAsync();
+
+        AdminData data = new(page.Options);
+        Assert.Equal([("Zed", "The Valley", 2, 0), ("Ann", "The Valley", 0, 2), ("Bob", "The Tower", 0, 0), ("Cid", null, 0, 0)],
+            data.ReadFunnel(data.LoadCeilings()).Select(l => (l.Name, l.Chapter, l.Cleared, l.Unfinished)).ToList());
+
+        string html = await page.Client.GetStringAsync("/boards");
+        string chart = Between(html, "<h2>Players per level", "<h2>Boards</h2>");
+        Assert.Contains("<svg class=\"chart wide\"", chart);
+        Assert.Contains("<ol class=\"chapters\"><li><b>1</b> The Valley</li><li><b>2</b> The Tower</li><li><b>3</b> Without a chapter</li></ol>", chart);
+        Assert.Equal(2, Regex.Matches(chart, "<line class=\"sep\"").Count);
+        Assert.Contains("<title>Ann · Not cleared yet: 2</title>", chart);
+    }
+
+    [Fact]
+    public async Task A_boards_scores_are_charted_in_tenths_of_its_ceiling_by_the_boards_rows()
+    {
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, "Ann"), Api.Ceiling);          // the ceiling itself: the last tenth
+            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, "Bob"), Api.Ceiling / 10 - 1); // just under a tenth: the first
+            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, "Cid"), Api.Ceiling / 2, stars: 0);
+            Guid dan = AdminPage.AddPlayer(store, c, now, "Dan");
+            AdminPage.AddClear(store, c, now, dan, 100);
+            AdminPage.AddClear(store, c, now, dan, 49_000, stars: 0);   // after his clear: not his row
+            Guid hid = AdminPage.AddPlayer(store, c, now, "Hid");
+            store.SetHidden(c, hid, true);
+            AdminPage.AddClear(store, c, now, hid, 30_000);
+            AdminPage.AddClear(store, c, now, AdminPage.AddPlayer(store, c, now, "Eve"), 300, board: Unknown);
+        });
+        page.WriteCeilingTable();
+        await page.LogInAsync();
+
+        AdminData data = new(page.Options);
+        AdminData.ScoreBins bins = data.ReadBoard(new BoardKey(Api.File, Api.Hash, Api.Rules), data.LoadCeilings())!.Scores!;
+        Assert.Equal([2, 0, 0, 0, 0, 0, 0, 0, 0, 1], bins.Clears);
+        Assert.Equal([0, 0, 0, 0, 0, 1, 0, 0, 0, 0], bins.Unfinished);
+        Assert.Contains("<title>90–100 % · Clears: 1</title>", WebUtility.HtmlDecode(await page.Client.GetStringAsync($"/board?file={Api.File}&hash={Api.Hash}&rules={Api.Rules}")));
+
+        // No ceiling, no tenths
+        Assert.Null(data.ReadBoard(Unknown, data.LoadCeilings())!.Scores);
+        Assert.DoesNotContain("Best scores against the ceiling", await page.Client.GetStringAsync($"/board?file={Unknown.File}&hash={Unknown.Hash}&rules=1"));
+    }
+
+    [Fact]
     public async Task The_boards_say_so_when_no_ceiling_table_was_read()
     {
         await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
