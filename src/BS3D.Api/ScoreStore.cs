@@ -4,7 +4,8 @@ using Microsoft.Data.Sqlite;
 namespace BS3D.Api;
 
 /// <summary>
-/// The service's whole state: one SQLite file, two tables (issue #1).
+/// The service's whole state: one SQLite file, two tables (issue #1), the refusals' two (#5) and the notes (#10,
+/// <c>ScoreStore.Notes.cs</c>).
 /// <para>
 /// <b>Boards are views over an append-only log, not tables that get updated.</b> Every accepted submission is a row
 /// of <c>submissions</c> and stays one — a clear below the player's best is kept as the record of what was sent and
@@ -20,9 +21,9 @@ namespace BS3D.Api;
 /// a player: two equal scores rank in the order they arrived.
 /// </para>
 /// </summary>
-public sealed class ScoreStore(string path)
+public sealed partial class ScoreStore(string path)
 {
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
 
     private readonly string _connectionString = new SqliteConnectionStringBuilder
     {
@@ -83,6 +84,7 @@ public sealed class ScoreStore(string path)
                 path TEXT NOT NULL,
                 detail TEXT NOT NULL);
             """);
+        Execute(c, NotesSchema);
         Execute(c, $"PRAGMA user_version = {SchemaVersion};");
     }
 

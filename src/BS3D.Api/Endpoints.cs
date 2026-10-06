@@ -33,6 +33,7 @@ public static partial class Endpoints
         app.MapGet("/v1/boards", GetBoards);
         app.MapPut("/v1/players/{id:guid}", PutPlayer);
         app.MapDelete("/v1/players/{id:guid}", DeletePlayer);
+        MapNoteEndpoint(app);
     }
 
     private static IResult PostScore(SubmissionRequest? body, HttpContext http, ScoreStore store, Ceilings ceilings,

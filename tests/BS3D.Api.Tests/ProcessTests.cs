@@ -211,6 +211,66 @@ public sealed class ProcessTests
         Assert.DoesNotContain(text.Replace("\r\n", "\n"), c => char.IsControl(c) && c != '\n');
     }
 
+    /// <summary>
+    /// A note's request size (#10) where only a real Kestrel enforces one: a note with a picture far past the 4 KB every
+    /// other request is held to is taken, a note past its own limit is a 413 before anything reads it, and a score
+    /// is still held to 4 KB. The test server the other tests use enforces no request size at all.
+    /// </summary>
+    [Fact]
+    public async Task A_note_has_a_request_size_of_its_own_and_nothing_else_does()
+    {
+        string folder = Path.Combine(Path.GetTempPath(), "bs3d-api-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        int port = FreePort();
+
+        ProcessStartInfo start = new("dotnet")
+        {
+            WorkingDirectory = folder,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "BS3D.Api.dll"));
+        start.ArgumentList.Add("--urls");
+        start.ArgumentList.Add($"http://127.0.0.1:{port}");
+        start.Environment["ASPNETCORE_ENVIRONMENT"] = "Production";
+        start.Environment["Scores__AddressSalt"] = "test-salt";
+        start.Environment["Scores__Database"] = Path.Combine(folder, "scores.db");
+        start.Environment["Scores__CeilingsDirectory"] = Path.Combine(folder, "ceilings");
+
+        using Process process = Process.Start(start)!;
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
+        try
+        {
+            using HttpClient client = new() { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
+            bool up = false;
+            for (int attempt = 0; attempt < 60 && !up && !process.HasExited; attempt++)
+            {
+                try { up = (await client.GetAsync("/v1/health")).IsSuccessStatusCode; }
+                catch (HttpRequestException) { await Task.Delay(500); }
+            }
+            Assert.True(up, "the service did not answer /v1/health");
+
+            HttpResponseMessage large = await client.PostAsync("/v1/notes",
+                System.Net.Http.Json.JsonContent.Create(NoteTests.Note(picture: NoteTests.Jpeg(body: 300_000))));
+            HttpResponseMessage tooLarge = await client.PostAsync("/v1/notes",
+                new StringContent($$"""{"noteId":"{{Guid.NewGuid()}}","text":"{{new string('a', 700_000)}}","gameVersion":"v0.3.5"}""", Encoding.UTF8, "application/json"));
+            HttpResponseMessage score = await client.PostAsync("/v1/scores",
+                new StringContent($$"""{"submissionId":"{{Guid.NewGuid()}}","name":"{{new string('a', 5000)}}"}""", Encoding.UTF8, "application/json"));
+
+            Assert.Equal(HttpStatusCode.Created, large.StatusCode);
+            Assert.Equal(HttpStatusCode.RequestEntityTooLarge, tooLarge.StatusCode);
+            Assert.Equal(HttpStatusCode.RequestEntityTooLarge, score.StatusCode);
+        }
+        finally
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync();
+            Directory.Delete(folder, recursive: true);
+        }
+    }
+
     private static async Task<bool> Connects(IPAddress address, int port)
     {
         using TcpClient tcp = new();

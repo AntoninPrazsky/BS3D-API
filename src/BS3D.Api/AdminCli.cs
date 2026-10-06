@@ -10,6 +10,13 @@ namespace BS3D.Api;
 /// <c>admin export</c> (one JSON line per submission, oldest first), <c>admin backup &lt;file&gt;</c> (a consistent copy of
 /// the live database, taken while the service runs — SQLite's own backup API, so the Pi needs no <c>sqlite3</c> package,
 /// issue #3) and <c>admin count</c> (players and submissions, what an update is checked against: it must lose no row).
+/// <para>
+/// The notes (#10): <c>admin notes [--after &lt;id&gt;] [--out &lt;folder&gt;]</c> prints one JSON line per note, oldest first
+/// and without the address hash, and with <c>--out</c> writes each note's picture there as <c>&lt;id&gt;.jpg</c>, which is how
+/// an agent reads them on the box; <c>admin delete-note &lt;id&gt;</c> removes a note and its picture. <b><c>count</c> does not
+/// count notes, and must not start to</b>: <c>update.sh</c> compares its line before and after an update as text, and the
+/// line before is printed by the release being replaced.
+/// </para>
 /// </summary>
 public static class AdminCli
 {
@@ -52,15 +59,80 @@ public static class AdminCli
                 output.WriteLine($"players {Scalar(c, "SELECT COUNT(*) FROM players")} submissions {Scalar(c, "SELECT COUNT(*) FROM submissions")}");
                 return 0;
 
+            case ["notes", .. var rest]:
+                return Notes(rest, store, c, output);
+
+            case ["delete-note", var id] when long.TryParse(id, out long note):
+                bool deleted = store.DeleteNote(c, note);
+                output.WriteLine(deleted ? $"deleted note {note} and its picture" : "no such note");
+                return deleted ? 0 : 1;
+
             case ["export"]:
                 foreach (Dictionary<string, object?> row in store.Export(c))
                     output.WriteLine(JsonSerializer.Serialize(row));
                 return 0;
 
             default:
-                output.WriteLine("usage: admin hide-player <id> | show-player <id> | rename <id> <name> | export | backup <file> | count");
+                output.WriteLine(Usage);
                 return 2;
         }
+    }
+
+    private const string Usage = "usage: admin hide-player <id> | show-player <id> | rename <id> <name> | export | backup <file> | count"
+        + " | notes [--after <id>] [--out <folder>] | delete-note <id>";
+
+    // A note's text in a terminal: every control character escaped, as JSON always does, and the letters as letters
+    private static readonly JsonSerializerOptions NoteJson = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    private static int Notes(string[] args, ScoreStore store, SqliteConnection c, TextWriter output)
+    {
+        long after = 0;
+        string? folder = null;
+        for (int i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--after" when i + 1 < args.Length && long.TryParse(args[i + 1], out after):
+                    i++;
+                    break;
+                case "--out" when i + 1 < args.Length:
+                    folder = Path.GetFullPath(args[++i]);
+                    break;
+                default:
+                    output.WriteLine(Usage);
+                    return 2;
+            }
+        }
+
+        if (folder != null) Directory.CreateDirectory(folder);
+        foreach (ScoreStore.StoredNote n in store.Notes(c, after))
+        {
+            string? file = null;
+            if (folder != null && n.PictureBytes > 0 && store.NotePicture(c, n.Id) is { } picture)
+            {
+                file = Path.Combine(folder, $"{n.Id}.jpg");
+                File.WriteAllBytes(file, picture);
+            }
+
+            output.WriteLine(JsonSerializer.Serialize(new
+            {
+                n.Id,
+                n.NoteId,
+                n.ReceivedAt,
+                n.PlayerId,
+                n.PlayerName,
+                n.ClaimedName,
+                n.GameVersion,
+                n.Text,
+                Context = JsonDocument.Parse(n.Context).RootElement,
+                n.PictureBytes,
+                Picture = file,
+            }, NoteJson));
+        }
+        return 0;
     }
 
     private static long Scalar(SqliteConnection c, string sql)

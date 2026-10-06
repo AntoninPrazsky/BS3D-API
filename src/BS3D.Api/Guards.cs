@@ -52,18 +52,24 @@ public sealed class RateLimits(TimeProvider clock)
     private readonly ConcurrentDictionary<string, Queue<DateTimeOffset>> _seen = new();
 
     /// <summary>Records an attempt under <paramref name="key"/>; false with the wait when the window is full.</summary>
-    public bool TryTake(string key, int perMinute, out TimeSpan retryAfter)
+    public bool TryTake(string key, int perMinute, out TimeSpan retryAfter) => TryTake(key, perMinute, Window, out retryAfter);
+
+    /// <summary>
+    /// The same over a window of its own (a note's day, #10). A key belongs to one window: the notes use keys of their
+    /// own, so a day's queue never meets a minute's.
+    /// </summary>
+    public bool TryTake(string key, int limit, TimeSpan window, out TimeSpan retryAfter)
     {
         DateTimeOffset now = clock.GetUtcNow();
         Queue<DateTimeOffset> times = _seen.GetOrAdd(key, _ => new Queue<DateTimeOffset>());
 
         lock (times)
         {
-            while (times.Count > 0 && now - times.Peek() >= Window) times.Dequeue();
+            while (times.Count > 0 && now - times.Peek() >= window) times.Dequeue();
 
-            if (times.Count >= perMinute)
+            if (times.Count >= limit)
             {
-                retryAfter = Window - (now - times.Peek());
+                retryAfter = window - (now - times.Peek());
                 return false;
             }
 

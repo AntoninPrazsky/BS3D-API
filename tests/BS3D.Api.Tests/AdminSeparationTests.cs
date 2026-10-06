@@ -33,6 +33,7 @@ public sealed class AdminSeparationTests
             "GET /v1/boards",
             "PUT /v1/players/{id:guid}",
             "DELETE /v1/players/{id:guid}",
+            "POST /v1/notes",
             "GET /v1/health",
             "GET /openapi/{documentName}.json",
         }, routes);

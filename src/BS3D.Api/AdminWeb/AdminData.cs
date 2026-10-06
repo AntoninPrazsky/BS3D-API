@@ -11,7 +11,8 @@ public sealed partial class AdminData(AdminWebOptions options)
 {
     public sealed record Overview(
         long SchemaVersion, int Players, int HiddenPlayers, int Submissions, int Unfinished, int HiddenSubmissions,
-        long DatabaseBytes, Backup? NewestBackup, OffBox? LastOffBox, IReadOnlyList<Day> Days, IReadOnlyList<RefusalDay> Refusals);
+        long DatabaseBytes, Backup? NewestBackup, OffBox? LastOffBox, IReadOnlyList<Day> Days, IReadOnlyList<RefusalDay> Refusals,
+        int Notes, long NotePictureBytes);
 
     /// <summary>One UTC day: the clears and unfinished attempts (0 stars, #8) accepted, and the players new that day.</summary>
     public sealed record Day(string Date, int Clears, int Unfinished, int NewPlayers);
@@ -65,8 +66,13 @@ public sealed partial class AdminData(AdminWebOptions options)
         using (SqliteDataReader r = cmd.ExecuteReader())
             while (r.Read()) refusals.Add(new RefusalDay(r.GetString(0), r.GetString(1), r.GetInt32(2)));
 
+        // The page never migrates: on a database the service has not brought to schema 3 yet there is no notes table, and
+        // the overview says so (its schema warning) instead of failing
+        long schema = Scalar(c, "PRAGMA user_version");
+        bool notes = schema >= 3;
+
         return new Overview(
-            Scalar(c, "PRAGMA user_version"),
+            schema,
             (int)Scalar(c, "SELECT COUNT(*) FROM players"),
             (int)Scalar(c, "SELECT COUNT(*) FROM players WHERE hidden = 1"),
             (int)Scalar(c, "SELECT COUNT(*) FROM submissions"),
@@ -76,7 +82,9 @@ public sealed partial class AdminData(AdminWebOptions options)
             NewestBackup(),
             LastOffBox(),
             days.OrderByDescending(d => d.Key).Select(d => new Day(d.Key, d.Value.Clears, d.Value.Unfinished, d.Value.Players)).ToList(),
-            refusals);
+            refusals,
+            notes ? (int)Scalar(c, "SELECT COUNT(*) FROM notes") : 0,
+            notes ? Scalar(c, "SELECT COALESCE(SUM(picture_bytes), 0) FROM notes") : 0);
     }
 
     /// <summary>The newest accepted submissions and refusals, newest first.</summary>
