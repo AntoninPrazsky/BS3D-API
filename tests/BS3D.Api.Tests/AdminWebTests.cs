@@ -246,7 +246,7 @@ public sealed class AdminWebTests
         {
             ann = AdminPage.AddPlayer(store, c, now, "Ann", token);
             AdminPage.AddClear(store, c, now, ann, 100, address);
-            store.InsertNote(c, new ScoreStore.NewNote(Guid.NewGuid(), now, ann, null, "a note", "v0.3.5", "{}", address, null, 0, 0, "{}"));
+            store.InsertNote(c, new ScoreStore.NewNote(Guid.NewGuid(), now, ann, null, null, null, "a note", "v0.3.5", "{}", address, null, 0, 0, "{}"));
             // A rate-limited address is named by its hash in the refusal log, as in the journal
             store.WriteRefusals(c, new Refusals.Batch(new Dictionary<(string, string), int> { [(ScoreStore.DayOf(now), Reasons.RateLimited)] = 1 },
                 [new Refusals.Entry(now, 429, Reasons.RateLimited, "POST", "/v1/scores", $"address {address}")], 0), now, TimeSpan.FromDays(7), 100);
@@ -297,6 +297,8 @@ public sealed class AdminWebTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("The database is at schema 2", await response.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.OK, (await page.Client.GetAsync("/notes")).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await page.Client.GetAsync("/note?id=1")).StatusCode);
     }
 
     [Fact]

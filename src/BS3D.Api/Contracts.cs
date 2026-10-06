@@ -113,4 +113,5 @@ public static class Reasons
     public const string ContextTooLarge = "context-too-large";
     public const string BadPicture = "bad-picture";
     public const string PictureTooLarge = "picture-too-large";
+    public const string NotesFull = "notes-full";
 }

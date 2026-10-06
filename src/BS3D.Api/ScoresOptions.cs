@@ -72,8 +72,8 @@ public sealed class ScoresOptions
     /// <summary>The longest note, in UTF-16 units after NFC and trimming. A few sentences, not an essay.</summary>
     public int NoteMaxLength { get; set; } = 1000;
 
-    /// <summary>The longest context, in UTF-8 bytes as it is stored: the game's dozen fields with room to grow.</summary>
-    public int NoteMaxContextBytes { get; set; } = 4096;
+    /// <summary>The longest context, in UTF-8 bytes as it is stored: the game's twenty fields, about 600 bytes, with room to grow.</summary>
+    public int NoteMaxContextBytes { get; set; } = 2048;
 
     /// <summary>The largest picture, decoded. The game sends a JPEG at most 1280 pixels wide.</summary>
     public int NoteMaxPictureBytes { get; set; } = 400_000;
@@ -97,8 +97,16 @@ public sealed class ScoresOptions
     public int NotesPerDay { get; set; } = 500;
 
     /// <summary>
-    /// The pictures stored together, at most. Past it a note is still kept, without its picture, and its answer says
-    /// so: the owner reads the notes and deletes old ones (<c>admin delete-note</c>) to make room.
+    /// The notes stored at most; past it a note is refused (429, <c>notes-full</c>) and stays in the game's outbox. It
+    /// bounds what the notes add to the database, which the nightly backup copies thirty times on the box and a year's
+    /// worth on the card: at most this many texts and contexts, about 15 MB, where a real note is a tenth of that.
     /// </summary>
-    public long NotesMaxStoredPictureBytes { get; set; } = 1L << 30;
+    public int NotesMaxStored { get; set; } = 5000;
+
+    /// <summary>
+    /// The pictures stored together, at most, as files in <c>note-pictures</c> beside the database (no backup copies
+    /// them). Past it a note is still kept, without its picture, and its answer says so: the owner reads the notes and
+    /// deletes old ones (<c>admin delete-note</c>) to make room.
+    /// </summary>
+    public long NotesMaxStoredPictureBytes { get; set; } = 512L << 20;
 }

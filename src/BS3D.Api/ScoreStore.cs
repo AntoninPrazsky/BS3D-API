@@ -25,12 +25,25 @@ public sealed partial class ScoreStore(string path)
 {
     public const int SchemaVersion = 3;
 
-    private readonly string _connectionString = new SqliteConnectionStringBuilder
+    private readonly string _connectionString = ConnectionStringFor(path);
+
+    /// <summary>The connection string of a store over <paramref name="database"/>: what names its connection pool.</summary>
+    public static string ConnectionStringFor(string database) => new SqliteConnectionStringBuilder
     {
-        DataSource = path,
+        DataSource = database,
         Mode = SqliteOpenMode.ReadWriteCreate,
         Pooling = true,
     }.ToString();
+
+    /// <summary>
+    /// Closes this store's idle pooled connections, and only this store's: what a test's fixture does before it deletes
+    /// its folder. <see cref="SqliteConnection.ClearAllPools"/> would reach into every other fixture running beside it.
+    /// </summary>
+    public void ClearPool()
+    {
+        using SqliteConnection connection = new(_connectionString);
+        SqliteConnection.ClearPool(connection);
+    }
 
     public SqliteConnection Open()
     {
@@ -107,15 +120,21 @@ public sealed partial class ScoreStore(string path)
     public int SetHidden(SqliteConnection c, Guid id, bool hidden) =>
         Command(c, "UPDATE players SET hidden = $h WHERE id = $id", ("$id", id.ToString()), ("$h", hidden ? 1 : 0)).ExecuteNonQuery();
 
-    /// <summary>The player and every submission of theirs (the foreign key cascades). Returns the submissions removed.</summary>
+    /// <summary>
+    /// The player and every submission of theirs (the foreign key cascades), and every note of theirs with its picture
+    /// (#10: linked, or sent before the service knew them with their id and token). Returns the submissions removed.
+    /// </summary>
     public int DeletePlayer(SqliteConnection c, Guid id)
     {
         Begin(c);
         try
         {
             int removed = Convert.ToInt32(Command(c, "SELECT COUNT(*) FROM submissions WHERE player_id = $id", ("$id", id.ToString())).ExecuteScalar());
+            List<long> notes = NotesOfPlayer(c, id);
+            foreach (long note in notes) Command(c, "DELETE FROM notes WHERE id = $n", ("$n", note)).ExecuteNonQuery();
             Command(c, "DELETE FROM players WHERE id = $id", ("$id", id.ToString())).ExecuteNonQuery();
             Commit(c);
+            foreach (long note in notes) DeletePicture(note);
             return removed;
         }
         catch

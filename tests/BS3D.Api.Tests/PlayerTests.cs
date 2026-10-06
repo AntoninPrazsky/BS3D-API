@@ -122,6 +122,6 @@ public sealed class PlayerTests
 
         using var c = restored.Open();
         Assert.Equal(250, restored.Page(c, new BoardKey(Api.File, Api.Hash, Api.Rules), null, 10, 0).Single().Score);
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        restored.ClearPool();
     }
 }

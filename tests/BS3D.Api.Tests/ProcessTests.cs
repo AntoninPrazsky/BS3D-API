@@ -82,8 +82,9 @@ public sealed class ProcessTests
         if (!OperatingSystem.IsLinux()) return;
         string folder = Path.Combine(Path.GetTempPath(), "bs3d-api-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
-        new ScoreStore(Path.Combine(folder, "scores.db")).EnsureSchema();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        ScoreStore seeded = new(Path.Combine(folder, "scores.db"));
+        seeded.EnsureSchema();
+        seeded.ClearPool();
         int port = FreePort(), urlsPort = FreePort(), endpointPort = FreePort();
 
         ProcessStartInfo start = new("dotnet")
@@ -159,8 +160,9 @@ public sealed class ProcessTests
     {
         string folder = Path.Combine(Path.GetTempPath(), "bs3d-api-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
-        new ScoreStore(Path.Combine(folder, "scores.db")).EnsureSchema();
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        ScoreStore seeded = new(Path.Combine(folder, "scores.db"));
+        seeded.EnsureSchema();
+        seeded.ClearPool();
         using TcpListener taken = new(IPAddress.Loopback, 0);
         taken.Start();
         int port = ((IPEndPoint)taken.LocalEndpoint).Port;

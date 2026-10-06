@@ -23,6 +23,8 @@ public sealed partial class AdminData
     public (IReadOnlyList<NoteRow> Notes, int Total) ReadNotes()
     {
         using SqliteConnection c = Open();
+        // A database the service has not brought to schema 3 has no notes table; the overview says why
+        if (Scalar(c, "PRAGMA user_version") < 3) return ([], 0);
         List<NoteRow> notes = new();
         using (SqliteCommand cmd = Command(c, $"{NoteSelect} ORDER BY n.id DESC LIMIT $n", "$n", NotesListed))
         using (SqliteDataReader r = cmd.ExecuteReader())
@@ -33,24 +35,38 @@ public sealed partial class AdminData
     public NoteView? ReadNote(long id)
     {
         using SqliteConnection c = Open();
+        if (Scalar(c, "PRAGMA user_version") < 3) return null;
         using SqliteCommand cmd = Command(c, $"{NoteSelect} WHERE n.id = $id", "$id", id);
         using SqliteDataReader r = cmd.ExecuteReader();
         if (!r.Read()) return null;
 
         (NoteRow row, string context) = ReadNoteRow(r);
-        List<(string, string)> fields = new();
-        using (JsonDocument document = JsonDocument.Parse(context))
-            foreach (JsonProperty p in document.RootElement.EnumerateObject())
-                fields.Add((p.Name, p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString()! : p.Value.GetRawText()));
-        return new NoteView(row, fields, r.IsDBNull(11) ? 0 : r.GetInt32(11), r.IsDBNull(12) ? 0 : r.GetInt32(12));
+        return new NoteView(row, Fields(context), r.IsDBNull(11) ? 0 : r.GetInt32(11), r.IsDBNull(12) ? 0 : r.GetInt32(12));
     }
 
-    /// <summary>A note's JPEG, or null.</summary>
+    /// <summary>A context's fields, or the whole of it as one when it does not read: a bad note must not be a 500.</summary>
+    private static List<(string, string)> Fields(string context)
+    {
+        List<(string, string)> fields = new();
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(context);
+            foreach (JsonProperty p in document.RootElement.EnumerateObject())
+                fields.Add((p.Name, p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString()! : p.Value.GetRawText()));
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException)
+        {
+            fields.Clear();
+            fields.Add(("(unreadable)", context));
+        }
+        return fields;
+    }
+
+    /// <summary>A note's JPEG, from <c>note-pictures</c> beside the database, or null.</summary>
     public byte[]? ReadNotePicture(long id)
     {
-        using SqliteConnection c = Open();
-        using SqliteCommand cmd = Command(c, "SELECT picture FROM notes WHERE id = $id", "$id", id);
-        return cmd.ExecuteScalar() as byte[];
+        string file = Path.Combine(ScoreStore.PicturesDirectoryFor(options.Database), id.ToString(CultureInfo.InvariantCulture) + ".jpg");
+        return File.Exists(file) ? File.ReadAllBytes(file) : null;
     }
 
     // The columns ReadNoteRow reads, in its order; ip_hash is not one of them

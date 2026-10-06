@@ -32,7 +32,7 @@ public sealed class Api : WebApplicationFactory<Program>
     public FakeTimeProvider Clock { get; } = new(new DateTimeOffset(2026, 9, 15, 12, 0, 0, TimeSpan.Zero));
 
     /// <summary>The address every request seems to come from. The test server leaves it unset, as no proxy is trusted.</summary>
-    public IPAddress? ClientAddress { get; init; }
+    public IPAddress? ClientAddress { get; set; }
 
     /// <summary>Every line the service logs.</summary>
     public LogCapture Log { get; } = new();
@@ -90,7 +90,9 @@ public sealed class Api : WebApplicationFactory<Program>
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        // This fixture's pool only: clearing every pool reached into the fixtures running beside it, whose flusher was
+        // writing (an ObjectDisposedException at their stop, 2 runs in 12)
+        new ScoreStore(_settings["Scores:Database"]!).ClearPool();
         try { Directory.Delete(_folder, recursive: true); } catch (IOException) { }
     }
 

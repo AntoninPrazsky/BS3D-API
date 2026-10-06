@@ -79,7 +79,7 @@ public sealed class AdminPage : IAsyncDisposable
     {
         Client?.Dispose();
         if (App != null) await App.DisposeAsync();
-        SqliteConnection.ClearAllPools();
+        Store.ClearPool();
         try { Directory.Delete(_folder, recursive: true); } catch (IOException) { }
     }
 

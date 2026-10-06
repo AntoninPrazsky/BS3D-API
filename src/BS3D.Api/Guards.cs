@@ -40,6 +40,22 @@ public sealed class AddressHasher(string salt)
     }
 
     public static string AddressOf(HttpContext context) => context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+    /// <summary>
+    /// What a note's limits count by (#10): an IPv4 address, or an IPv6 address's /64 — one host is handed a whole /64,
+    /// so a limit by the full address is no limit for it.
+    /// </summary>
+    public static string NetworkOf(HttpContext context)
+    {
+        System.Net.IPAddress? address = context.Connection.RemoteIpAddress;
+        if (address == null) return "unknown";
+        if (address.IsIPv4MappedToIPv6) address = address.MapToIPv4();
+        if (address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetworkV6) return address.ToString();
+
+        byte[] bytes = address.GetAddressBytes();
+        Array.Clear(bytes, 8, 8);
+        return new System.Net.IPAddress(bytes) + "/64";
+    }
 }
 
 /// <summary>
