@@ -81,11 +81,47 @@ public static class AdminCli
     private const string Usage = "usage: admin hide-player <id> | show-player <id> | rename <id> <name> | export | backup <file> | count"
         + " | notes [--after <id>] [--out <folder>] | delete-note <id>";
 
-    // A note's text in a terminal: every control character escaped, as JSON always does, and the letters as letters
+    // A note's text in a terminal: the letters as letters (the relaxed encoder), every control character escaped (JSON
+    // always does), and every format and separator character escaped too (Terminal): a C0 or C1 control is a terminal
+    // escape, and a right-to-left override reorders the line around it
     private static readonly JsonSerializerOptions NoteJson = new(JsonSerializerDefaults.Web)
     {
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
+
+    /// <summary>
+    /// A JSON line with every format, line-separator and paragraph-separator character written as its escape. They occur
+    /// only inside the line's strings, where the escape means the same character, so the line is the same JSON; the
+    /// relaxed encoder lets them through, and in a terminal they act.
+    /// </summary>
+    private static string Terminal(string json)
+    {
+        System.Text.StringBuilder line = new(json.Length);
+        foreach (char c in json)
+        {
+            if (char.GetUnicodeCategory(c) is System.Globalization.UnicodeCategory.Format
+                or System.Globalization.UnicodeCategory.LineSeparator or System.Globalization.UnicodeCategory.ParagraphSeparator)
+                line.Append(@"\u").Append(((int)c).ToString("X4", System.Globalization.CultureInfo.InvariantCulture));
+            else line.Append(c);
+        }
+        return line.ToString();
+    }
+
+    /// <summary>A note's context as JSON, or as its text when it does not parse: one bad note must not stop the listing.</summary>
+    private static object ContextOf(string context)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(context);
+            JsonElement root = document.RootElement.Clone();
+            _ = JsonSerializer.Serialize(root, NoteJson);
+            return root;
+        }
+        catch (Exception e) when (e is JsonException or InvalidOperationException)
+        {
+            return context;
+        }
+    }
 
     private static int Notes(string[] args, ScoreStore store, SqliteConnection c, TextWriter output)
     {
@@ -111,13 +147,13 @@ public static class AdminCli
         foreach (ScoreStore.StoredNote n in store.Notes(c, after))
         {
             string? file = null;
-            if (folder != null && n.PictureBytes > 0 && store.NotePicture(c, n.Id) is { } picture)
+            if (folder != null && n.PictureBytes > 0 && store.NotePicture(n.Id) is { } picture)
             {
                 file = Path.Combine(folder, $"{n.Id}.jpg");
                 File.WriteAllBytes(file, picture);
             }
 
-            output.WriteLine(JsonSerializer.Serialize(new
+            output.WriteLine(Terminal(JsonSerializer.Serialize(new
             {
                 n.Id,
                 n.NoteId,
@@ -127,10 +163,10 @@ public static class AdminCli
                 n.ClaimedName,
                 n.GameVersion,
                 n.Text,
-                Context = JsonDocument.Parse(n.Context).RootElement,
+                Context = ContextOf(n.Context),
                 n.PictureBytes,
                 Picture = file,
-            }, NoteJson));
+            }, NoteJson)));
         }
         return 0;
     }

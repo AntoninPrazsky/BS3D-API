@@ -61,8 +61,9 @@ public sealed class NoteTests
         Assert.Equal("v0.3.5", stored.GameVersion);
         Assert.Equal("Sea", JsonDocument.Parse(stored.Context).RootElement.GetProperty("scene").GetString());
         Assert.Equal(Jpeg().Length, stored.PictureBytes);
-        using SqliteConnection c = api.Store.Open();
-        Assert.Equal(Jpeg(), api.Store.NotePicture(c, stored.Id));
+        // A file beside the database, not a row: the nightly backup copies the database
+        Assert.Equal(Jpeg(), File.ReadAllBytes(api.Store.PicturePath(stored.Id)));
+        Assert.Equal(Jpeg(), api.Store.NotePicture(stored.Id));
     }
 
     [Fact]
@@ -304,8 +305,11 @@ public sealed class NoteTests
             AdminCli.Run(["notes", "--after", first.RootElement.GetProperty("id").GetInt64().ToString()], api.Store, new ScoresOptions(), after);
             Assert.Single(after.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries));
 
-            Assert.Equal(0, AdminCli.Run(["delete-note", first.RootElement.GetProperty("id").GetInt64().ToString()], api.Store, new ScoresOptions(), new StringWriter()));
+            long firstId = first.RootElement.GetProperty("id").GetInt64();
+            Assert.True(File.Exists(api.Store.PicturePath(firstId)));
+            Assert.Equal(0, AdminCli.Run(["delete-note", firstId.ToString()], api.Store, new ScoresOptions(), new StringWriter()));
             Assert.Equal("second, ěščř", Assert.Single(Stored(api)).Text);
+            Assert.False(File.Exists(api.Store.PicturePath(firstId)));
             Assert.Equal(1, AdminCli.Run(["delete-note", "999"], api.Store, new ScoresOptions(), new StringWriter()));
         }
         finally
@@ -315,12 +319,9 @@ public sealed class NoteTests
     }
 
     private static long AddNote(ScoreStore store, SqliteConnection c, DateTimeOffset now, string text, Guid? player = null,
-        string? claimed = null, byte[]? picture = null, string ipHash = "1PHASH0000000000")
-    {
-        store.InsertNote(c, new ScoreStore.NewNote(Guid.NewGuid(), now, player, claimed, text, "v0.3.5", GameContext.GetRawText(), ipHash,
-            picture, 1280, 533, "{}"));
-        return store.Notes(c, 0)[^1].Id;
-    }
+        string? claimed = null, byte[]? picture = null, string ipHash = "1PHASH0000000000", string? context = null) =>
+        store.InsertNote(c, new ScoreStore.NewNote(Guid.NewGuid(), now, player, null, null, claimed, text, "v0.3.5",
+            context ?? GameContext.GetRawText(), ipHash, picture, 1280, 533, "{}"));
 
     [Fact]
     public async Task The_notes_tab_lists_who_wrote_what_and_a_note_page_shows_it_encoded()
@@ -365,6 +366,111 @@ public sealed class NoteTests
 
         foreach (string path in new[] { "/notes", $"/note?id={id}", $"/note.jpg?id={id}" })
             Assert.Equal(HttpStatusCode.Unauthorized, (await page.Client.GetAsync(path)).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("""{"where":"\ud800"}""")]
+    [InlineData("""{"\udc00":1}""")]
+    [InlineData("""{"deep":[{"x":"\ud800 lone"}]}""")]
+    public async Task A_context_string_that_is_not_text_is_refused(string context)
+    {
+        // Stored as it came, a lone surrogate's escape would be fine until a reader decoded it: the admin page and the CLI
+        using Api api = new();
+        StringContent body = new($$"""{"noteId":"{{Guid.NewGuid()}}","text":"hello","gameVersion":"v0.3.5","context":{{context}}}""",
+            System.Text.Encoding.UTF8, "application/json");
+
+        HttpResponseMessage response = await api.CreateClient().PostAsync("/v1/notes", body);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Equal(Reasons.BadContext, await Api.ReasonOf(response));
+        Assert.Empty(Stored(api));
+    }
+
+    [Fact]
+    public async Task Past_the_notes_cap_a_note_is_refused_and_a_retry_still_answered()
+    {
+        using Api api = new(new() { ["Scores:NotesMaxStored"] = "2" });
+        NoteRequest first = Note("first");
+
+        await Send(api, first);
+        await Send(api, Note("second"));
+        HttpResponseMessage third = await Send(api, Note("third"));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, third.StatusCode);
+        Assert.Equal(Reasons.NotesFull, await Api.ReasonOf(third));
+        api.Clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(HttpStatusCode.OK, (await Send(api, first)).StatusCode);
+        Assert.Equal(2, Stored(api).Count);
+    }
+
+    [Fact]
+    public async Task An_IPv6_host_is_limited_by_its_64_and_not_by_each_address()
+    {
+        using Api api = new(new() { ["Scores:NotesPerMinutePerAddress"] = "2" }) { ClientAddress = IPAddress.Parse("2001:db8:0:1::1") };
+
+        Assert.Equal(HttpStatusCode.Created, (await Send(api, Note())).StatusCode);
+        api.ClientAddress = IPAddress.Parse("2001:db8:0:1::2");
+        Assert.Equal(HttpStatusCode.Created, (await Send(api, Note())).StatusCode);
+        api.ClientAddress = IPAddress.Parse("2001:db8:0:1:ffff::3");
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await Send(api, Note())).StatusCode);
+
+        api.ClientAddress = IPAddress.Parse("2001:db8:0:2::1");
+        Assert.Equal(HttpStatusCode.Created, (await Send(api, Note())).StatusCode);
+        api.ClientAddress = IPAddress.Parse("192.0.2.1");
+        Assert.Equal(HttpStatusCode.Created, (await Send(api, Note())).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_newcomer_note_goes_with_them_when_they_remove_themselves_and_only_theirs()
+    {
+        using Api api = new();
+        var newcomer = Api.NewPlayer();
+        var impostor = Api.NewPlayer();
+        await Send(api, Note("mine, before my first score", player: newcomer.Id, picture: Jpeg()), newcomer.Token);
+        // Someone else's note claiming the newcomer's id, with a token that is not theirs
+        await Send(api, Note("not mine", player: newcomer.Id), impostor.Token);
+        long mine = Stored(api)[0].Id;
+
+        await api.Accepted(newcomer, Api.Clear(newcomer.Id, 100));
+        Assert.Equal(HttpStatusCode.NoContent, (await api.ClientFor(newcomer.Token).DeleteAsync($"/v1/players/{newcomer.Id}")).StatusCode);
+
+        Assert.Equal("not mine", Assert.Single(Stored(api)).Text);
+        Assert.False(File.Exists(api.Store.PicturePath(mine)));
+    }
+
+    [Fact]
+    public async Task A_refused_detail_is_cut_before_it_is_logged()
+    {
+        using Api api = new();
+
+        await Send(api, Note(version: new string('9', 5000)));
+
+        string line = Assert.Single(api.Log.Lines, l => l.Contains(Reasons.BadVersion));
+        Assert.True(line.Length < 400, $"{line.Length} characters");
+    }
+
+    [Fact]
+    public async Task One_unreadable_context_neither_stops_the_cli_nor_breaks_the_note_page()
+    {
+        long bad = 0;
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            bad = AddNote(store, c, now, "bad", context: """{"where":"\ud800"}""");
+            AddNote(store, c, now, "good, with \u202E an override");
+        });
+        await page.LogInAsync();
+
+        HttpResponseMessage response = await page.Client.GetAsync($"/note?id={bad}");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("(unreadable)", await response.Content.ReadAsStringAsync());
+
+        StringWriter output = new();
+        Assert.Equal(0, AdminCli.Run(["notes"], page.Store, new ScoresOptions(), output));
+        string[] lines = output.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);
+        Assert.Contains("good", lines[1]);
+        // Letters as letters, a format character escaped
+        Assert.DoesNotContain("\u202E", output.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

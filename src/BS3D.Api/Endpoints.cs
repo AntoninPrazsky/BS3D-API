@@ -269,6 +269,8 @@ public static partial class Endpoints
 
     private static IResult Refuse(ILogger log, HttpContext http, int status, string reason, string detail)
     {
+        // Cut as the refusal log cuts it: a detail can be a client's text, and a note's request may be 600 KB of it (#10)
+        if (detail.Length > Refusals.TextLength) detail = detail[..Refusals.TextLength] + "…";
         log.LogInformation("Refused {Method} {Path}: {Status} {Reason} ({Detail})", http.Request.Method, http.Request.Path, status, reason, detail);
         http.RequestServices.GetRequiredService<Refusals>().Record(http.RequestServices.GetRequiredService<TimeProvider>().GetUtcNow(),
             status, reason, http.Request.Method, http.Request.Path.Value ?? "", detail);
