@@ -136,6 +136,15 @@ public static class AdminWebApp
         });
         app.MapGet("/player", (AdminData data, string? id) =>
             Guid.TryParse(id, out Guid player) && data.ReadPlayer(player) is { } view ? Page(AdminPages.Player(view)) : Results.NotFound());
+        app.MapGet("/notes", (AdminData data) =>
+        {
+            (IReadOnlyList<AdminData.NoteRow> notes, int total) = data.ReadNotes();
+            return Page(AdminPages.Notes(notes, total));
+        });
+        app.MapGet("/note", (AdminData data, long? id) => id is long n && data.ReadNote(n) is { } note ? Page(AdminPages.Note(note)) : Results.NotFound());
+        // A note's picture, served only here: a JPEG the service checked the shape of, sent as one (nosniff is on every answer)
+        app.MapGet("/note.jpg", (AdminData data, long? id) =>
+            id is long n && data.ReadNotePicture(n) is { } picture ? Results.Bytes(picture, "image/jpeg") : Results.NotFound());
         app.MapGet("/style.css", () => Results.Content(AdminPages.Css, "text/css; charset=utf-8"));
         return app;
     }

@@ -64,6 +64,29 @@ public sealed record BoardSummary(string File, string Hash, int Rules, int Total
 /// <summary>A board's #1.</summary>
 public sealed record BoardTop(string Name, int Score, int Stars);
 
+/// <summary>
+/// The body of <c>POST /v1/notes</c> (#10, BS3D#813): a line a player typed about what they were looking at, with the
+/// game's context and, unless the player unticked it, a JPEG of that frame. Additive to contract v1. Anyone may send one:
+/// <see cref="PlayerId"/> with the bearer token links it to an existing player, and <see cref="Name"/> without a link is
+/// only what the note says it is.
+/// </summary>
+/// <param name="Context">A JSON object the game fills (the level, the scene, the quality, ...), stored as it came.</param>
+/// <param name="Screenshot">The JPEG as base64, or null.</param>
+public sealed record NoteRequest(
+    Guid NoteId,
+    string? Text,
+    string? GameVersion,
+    System.Text.Json.JsonElement? Context,
+    string? Screenshot,
+    Guid? PlayerId,
+    string? Name);
+
+/// <summary>
+/// What a note is answered with. <c>ScreenshotStored</c> is false when none was sent, and when the pictures stored have
+/// reached their cap: the note is kept without its picture rather than refused.
+/// </summary>
+public sealed record NoteAnswer(Guid NoteId, bool ScreenshotStored);
+
 /// <summary>The answer of <c>GET /v1/health</c>.</summary>
 public sealed record HealthAnswer(string Status, int Contract, int Schema, int Boards);
 
@@ -83,4 +106,11 @@ public static class Reasons
     public const string RateLimited = "rate-limited";
     public const string UnknownPlayer = "unknown-player";
     public const string SubmissionOfAnotherPlayer = "submission-of-another-player";
+    public const string EmptyNote = "empty-note";
+    public const string NoteTooLong = "note-too-long";
+    public const string BadText = "bad-text";
+    public const string BadContext = "bad-context";
+    public const string ContextTooLarge = "context-too-large";
+    public const string BadPicture = "bad-picture";
+    public const string PictureTooLarge = "picture-too-large";
 }

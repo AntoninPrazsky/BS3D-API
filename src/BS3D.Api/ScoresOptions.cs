@@ -65,4 +65,40 @@ public sealed class ScoresOptions
 
     /// <summary>Rows <c>refusal_log</c> keeps at most; each flush deletes the oldest beyond it.</summary>
     public int RefusalLogMaxRows { get; set; } = 10_000;
+
+    // Notes (#10, BS3D#813). Anyone may send one, text and a picture, onto a disk at the owner's home: these are what
+    // keeps that from being a free upload service.
+
+    /// <summary>The longest note, in UTF-16 units after NFC and trimming. A few sentences, not an essay.</summary>
+    public int NoteMaxLength { get; set; } = 1000;
+
+    /// <summary>The longest context, in UTF-8 bytes as it is stored: the game's dozen fields with room to grow.</summary>
+    public int NoteMaxContextBytes { get; set; } = 4096;
+
+    /// <summary>The largest picture, decoded. The game sends a JPEG at most 1280 pixels wide.</summary>
+    public int NoteMaxPictureBytes { get; set; } = 400_000;
+
+    /// <summary>The widest and tallest picture taken: a check that the JPEG is a game's frame and not a poster.</summary>
+    public int NoteMaxPictureSide { get; set; } = 2048;
+
+    /// <summary>
+    /// The largest request <c>POST /v1/notes</c> takes, above the 4 KB every other request is held to: the largest
+    /// picture in base64 (4/3 of it) with the text and the context, and a margin.
+    /// </summary>
+    public long NoteMaxRequestBytes { get; set; } = 600_000;
+
+    /// <summary>Notes one address may send in a minute: a player who wrote two in a row is fine, a script is not.</summary>
+    public int NotesPerMinutePerAddress { get; set; } = 3;
+
+    /// <summary>Notes one address may send in 24 hours, a sliding window held in memory (a restart forgets it).</summary>
+    public int NotesPerDayPerAddress { get; set; } = 30;
+
+    /// <summary>Notes the service takes in one UTC day from everyone together, counted in the database.</summary>
+    public int NotesPerDay { get; set; } = 500;
+
+    /// <summary>
+    /// The pictures stored together, at most. Past it a note is still kept, without its picture, and its answer says
+    /// so: the owner reads the notes and deletes old ones (<c>admin delete-note</c>) to make room.
+    /// </summary>
+    public long NotesMaxStoredPictureBytes { get; set; } = 1L << 30;
 }

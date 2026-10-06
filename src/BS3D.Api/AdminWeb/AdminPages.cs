@@ -17,7 +17,7 @@ public static partial class AdminPages
     internal static readonly string ShortVersion = Version.Split('+') is [var number, var commit] ? $"{number}+{commit[..Math.Min(7, commit.Length)]}" : Version;
 
     /// <summary>The tabs; a page that is not one of them names the one it belongs to.</summary>
-    private static readonly (string Href, string Name)[] Sections = [("/", "Overview"), ("/live", "Live"), ("/charts", "Charts"), ("/boards", "Boards"), ("/players", "Players")];
+    private static readonly (string Href, string Name)[] Sections = [("/", "Overview"), ("/live", "Live"), ("/charts", "Charts"), ("/boards", "Boards"), ("/players", "Players"), ("/notes", "Notes")];
 
     public static string Overview(AdminData.Overview o, DateTimeOffset now)
     {
@@ -46,6 +46,7 @@ public static partial class AdminPages
             <div class="stats">
             <div class="stat"><span>Players</span><strong>{o.Players}</strong><small>{o.HiddenPlayers} hidden</small></div>
             <div class="stat"><span>Accepted</span><strong>{o.Submissions}</strong><small>{o.Unfinished} unfinished · {o.HiddenSubmissions} by hidden players</small></div>
+            <div class="stat"><span>Notes</span><strong><a href="/notes">{o.Notes}</a></strong><small>pictures {Size(o.NotePictureBytes)}</small></div>
             <div class="stat"><span>Database</span><strong>{Size(o.DatabaseBytes)}</strong><small>schema {o.SchemaVersion}</small></div>
             <div class="stat"><span>Newest backup</span>{backup}</div>
             <div class="stat"><span>Off the box</span>{offBox}</div>

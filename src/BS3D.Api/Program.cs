@@ -40,7 +40,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(o =>
     o.ForwardedForHeaderName = "CF-Connecting-IP";
 });
 
-// A submission is a few hundred bytes; nothing this service takes is bigger than 4 KB (issue #2)
+// A submission is a few hundred bytes; nothing this service takes is bigger than 4 KB (issue #2) but a note with its
+// picture (#10), whose endpoint carries a limit of its own (Endpoints.Notes.cs)
 builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = 4096);
 
 WebApplication app = builder.Build();

@@ -73,6 +73,9 @@ public static partial class AdminPages
         tr.group th span { margin-left: .5rem; color: var(--faint); font-weight: 500; letter-spacing: .02em; text-transform: none; }
         table.facts th { width: 14rem; background: transparent; color: var(--muted); font-size: .85rem; font-weight: 500; text-transform: none; letter-spacing: 0; }
         table.facts td { white-space: normal; }
+        td.wrap { white-space: normal; min-width: 18rem; }
+        p.text { margin: 0; padding: 1rem 1.15rem; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 1rem; }
+        img.shot { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: var(--radius); }
 
         .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(13.5rem, 1fr)); gap: 1rem; }
         .stat { display: flex; flex-direction: column; gap: .3rem; min-width: 0; padding: 1rem 1.15rem 1.1rem; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
