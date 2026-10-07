@@ -10,8 +10,11 @@ namespace BS3D.Api.AdminWeb;
 /// </summary>
 public static partial class AdminPages
 {
-    /// <summary>One series: its name, its colour class and one value per day.</summary>
-    public sealed record ChartSeries(string Name, string Colour, IReadOnlyList<double> Values);
+    /// <summary>
+    /// One series: its name, its colour class and one value per day, NaN on a day without one (a line breaks there). A
+    /// line's point can carry a mark, drawn in the failure colour and named in its title and in the numbers.
+    /// </summary>
+    public sealed record ChartSeries(string Name, string Colour, IReadOnlyList<double> Values, IReadOnlyList<string?>? Marks = null);
 
     // The drawing's own units: the SVG scales to the panel's width, so these are proportions, not pixels. A chart across
     // the whole page is drawn twice as wide rather than scaled up, so that its text stays the size of the others'
@@ -37,6 +40,24 @@ public static partial class AdminPages
             ? Html.M($"<p class=\"note\">None in this range.</p>")
             : BarChart("Refusals per day", d, ch.Refusals.Select((r, i) => new ChartSeries(r.Reason, palette[i % palette.Length], Of(r.Counts))).ToList(), integer: true);
 
+        // The local builds in grey and the other releases in red under the releases charted apart, in the order they arrived
+        string[] releaseColours = ["c1", "c2", "c3", "c5"];
+        int charted = 0;
+        Markup versions = ch.Versions.Count == 0
+            ? Html.M($"<p class=\"note\">None in this range.</p>")
+            : BarChart("Game versions per day, in per cent of the day's submissions", d, ch.Versions.Select(v => new ChartSeries(v.Version,
+                v.Version switch { AdminData.LocalBuilds => "c6", AdminData.OtherReleases => "c4", _ => releaseColours[charted++ % releaseColours.Length] },
+                v.Share)).ToList(), integer: false);
+
+        // In the unit the largest backup reads best in, as the overview's sizes are
+        double largest = ch.BackupBytes.Where(double.IsFinite).DefaultIfEmpty(0).Max();
+        (string unit, double per) = largest < 1024 * 1024 ? ("KB", 1024.0) : ("MB", 1024.0 * 1024);
+        Markup sizes = LineChart($"Backup size per day, {unit}", d, [new(unit, "c1", ch.BackupBytes.Select(b => b / per).ToList())], integer: false);
+
+        string[] copyColours = ["c1", "c3", "c5"];
+        Markup copies = LineChart("Age of the newest copy per day, in days", d,
+            ch.Copies.Select((c, i) => new ChartSeries(c.Name, copyColours[i % copyColours.Length], c.Age, c.Marks)).ToList(), integer: false);
+
         return Layout("Charts", Html.M($"""
             <div class="ranges">{Range("14d", "14 days")}{Range("90d", "90 days")}{Range("all", "All")}</div>
             <p class="note">One value per UTC day, {d[0]} to {d[^1]}; no range starts before the first day anything was recorded. What the service received, hidden players included: the boards themselves leave hidden players out. A bar or a point shows its number under the pointer, and each chart's numbers are under it.</p>
@@ -48,6 +69,9 @@ public static partial class AdminPages
             <section><h2>Boards with a clear</h2>{LineChart("Boards with a clear", d, [new("Boards", "c3", Of(ch.BoardsCleared))])}</section>
             <section><h2>Minutes played, per day</h2>{BarChart("Minutes played per day", d, [new("Minutes", "c5", ch.Minutes)], integer: false)}</section>
             <section><h2>Refusals, per day</h2>{refusals}</section>
+            <section><h2>Game versions, % of each day's submissions</h2><p class="note">The {AdminData.ReleaseSeries} releases sent most in this range apart, newest on top; every local build (<code>dev-…</code>, the owner's and the agents') together in grey.</p>{versions}</section>
+            <section><h2>Database size, from the backups</h2><p class="note">Each day's last backup on the box, which keeps {AdminData.BackupKeepDays} days of them: a day without one has no point.</p>{sizes}</section>
+            <section><h2>Age of the newest copy</h2><p class="note">The oldest the newest good copy got each day, in days. On the box from the backups kept there; off the box and off the site from the log <code>deploy/backup.sh</code> keeps of its runs, so they start with its first line. A red point is a day a copy failed, or one when the newest good copy got older than its days between copies and half a day: a night it was due went by without one. A copy not set up is not drawn.</p>{copies}</section>
             </div>
             """), refresh: false);
     }
@@ -140,21 +164,34 @@ public static partial class AdminPages
         return Chart(label, x, series, top, step, integer, Html.Join(bars));
     }
 
-    /// <summary>One line per series, through each day's value, with a point per day.</summary>
-    public static Markup LineChart(string label, IReadOnlyList<string> days, IReadOnlyList<ChartSeries> series)
+    /// <summary>
+    /// One line per series, through each day's value, with a point per day that has one: a day without a value breaks
+    /// the line rather than drawing it down to zero.
+    /// </summary>
+    public static Markup LineChart(string label, IReadOnlyList<string> days, IReadOnlyList<ChartSeries> series, bool integer = true)
     {
         int n = days.Count;
-        (double top, double step) = Scale(series.SelectMany(s => s.Values).DefaultIfEmpty(0).Max(), integer: true);
+        (double top, double step) = Scale(series.SelectMany(s => s.Values).Where(double.IsFinite).DefaultIfEmpty(0).Max(), integer);
         double Y(double value) => Top + PlotHeight - value / top * PlotHeight;
+        string Point(int i, double value) => string.Create(CultureInfo.InvariantCulture, $"{X(i, n, NarrowWidth):0.##},{Y(value):0.##}");
         List<Markup> lines = new();
         foreach (ChartSeries s in series)
         {
-            string points = string.Join(" ", Enumerable.Range(0, n).Select(i => string.Create(CultureInfo.InvariantCulture, $"{X(i, n, NarrowWidth):0.##},{Y(s.Values[i]):0.##}")));
-            lines.Add(Html.M($"<polyline class=\"line {s.Colour}\" points=\"{points}\"/>"));
-            lines.AddRange(Enumerable.Range(0, n).Select(i => Html.M(
-                $"<circle class=\"{s.Colour}\" cx=\"{X(i, n, NarrowWidth):0.##}\" cy=\"{Y(s.Values[i]):0.##}\" r=\"2.5\"><title>{days[i]} · {s.Name}: {Number(s.Values[i], true)}</title></circle>")));
+            // Each run of days with values is a line of its own; a lone day is its point alone
+            for (int i = 0; i < n; i++)
+            {
+                if (!double.IsFinite(s.Values[i])) continue;
+                int last = i;
+                while (last + 1 < n && double.IsFinite(s.Values[last + 1])) last++;
+                if (last > i)
+                    lines.Add(Html.M($"<polyline class=\"line {s.Colour}\" points=\"{string.Join(" ", Enumerable.Range(i, last - i + 1).Select(k => Point(k, s.Values[k])))}\"/>"));
+                i = last;
+            }
+            lines.AddRange(Enumerable.Range(0, n).Where(i => double.IsFinite(s.Values[i])).Select(i => s.Marks?[i] is { } mark
+                ? Html.M($"<circle class=\"{s.Colour} mark\" cx=\"{X(i, n, NarrowWidth):0.##}\" cy=\"{Y(s.Values[i]):0.##}\" r=\"4\"><title>{days[i]} · {s.Name}: {Number(s.Values[i], integer)}, {mark}</title></circle>")
+                : Html.M($"<circle class=\"{s.Colour}\" cx=\"{X(i, n, NarrowWidth):0.##}\" cy=\"{Y(s.Values[i]):0.##}\" r=\"2.5\"><title>{days[i]} · {s.Name}: {Number(s.Values[i], integer)}</title></circle>")));
         }
-        return Chart(label, DayAxis(days), series, top, step, integer: true, Html.Join(lines));
+        return Chart(label, DayAxis(days), series, top, step, integer, Html.Join(lines));
     }
 
     /// <summary>
@@ -178,6 +215,12 @@ public static partial class AdminPages
     private static string Number(double value, bool integer) =>
         value.ToString(integer ? "0" : "0.##", CultureInfo.InvariantCulture);
 
+    /// <summary>A series' value on a slot in the numbers table, with its mark when it has one.</summary>
+    private static Markup Cell(ChartSeries s, int i, bool integer) =>
+        !double.IsFinite(s.Values[i]) ? Html.M($"<td class=\"n\">–</td>")
+        : s.Marks?[i] is { } mark ? Html.M($"<td class=\"n\">{Number(s.Values[i], integer)} <span class=\"flag\">{mark}</span></td>")
+        : Html.M($"<td class=\"n\">{Number(s.Values[i], integer)}</td>");
+
     private static Markup Chart(string label, XAxis x, IReadOnlyList<ChartSeries> series, double top, double step, bool integer, Markup plot)
     {
         int n = x.Keys.Count;
@@ -191,7 +234,7 @@ public static partial class AdminPages
         Markup head = Html.Join(series.Select(s => Html.M($"<th class=\"n\">{s.Name}</th>")));
         IEnumerable<int> order = x.LastFirst ? Enumerable.Range(0, n).Reverse() : Enumerable.Range(0, n);
         Markup rows = Html.Join(order.Select(i => Html.M(
-            $"<tr><td>{x.Keys[i]}</td>{Html.Join(series.Select(s => Html.M($"<td class=\"n\">{Number(s.Values[i], integer)}</td>")))}</tr>")));
+            $"<tr><td>{x.Keys[i]}</td>{Html.Join(series.Select(s => Cell(s, i, integer)))}</tr>")));
         return Html.M($"""
             <div class="panel chart-panel"><svg class="{(x.Wide ? "chart wide" : "chart")}" viewBox="0 0 {chartWidth:0} {ChartHeight:0}" role="img" aria-label="{label}"><title>{label}</title>{grid}{plot}{x.Labels(chartWidth)}</svg>
             <ul class="legend">{legend}</ul>{x.Key}

@@ -136,18 +136,20 @@ public sealed partial class AdminData(AdminWebOptions options)
     /// <summary>A copy's record read as its <c>key=value</c> lines; null when there is none or it cannot be read.</summary>
     private OffBox? CopyRecord(string name)
     {
-        Dictionary<string, string> fields;
         try
         {
-            fields = File.ReadLines(Path.Combine(BackupFolder, name)).Take(20)
-                .Select(line => line.Split('=', 2)).Where(kv => kv.Length == 2)
-                .GroupBy(kv => kv[0]).ToDictionary(g => g.Key, g => g.First()[1]);
+            return CopyFields(File.ReadLines(Path.Combine(BackupFolder, name)).Take(20).Select(line => line.Split('=', 2)));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             return null;
         }
+    }
 
+    /// <summary>A copy's record from its <c>key=value</c> pairs, the first of each key; what does not read is left unset.</summary>
+    private static OffBox CopyFields(IEnumerable<string[]> pairs)
+    {
+        Dictionary<string, string> fields = pairs.Where(kv => kv.Length == 2).GroupBy(kv => kv[0]).ToDictionary(g => g.Key, g => g.First()[1]);
         static DateTimeOffset? When(string? stamp) =>
             DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTimeOffset at) ? at : null;
         return new OffBox(When(fields.GetValueOrDefault("attempt")), fields.GetValueOrDefault("result") ?? "unknown",

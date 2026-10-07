@@ -22,8 +22,9 @@
 # The repository keeps a copy a day for 30 days and one a month for 12 months.
 #
 # Every run records each copy, in backups/last-offbox (the drive) and backups/last-offsite: the attempt, its result
-# (ok, failed or none) and why, the last good copy and its time, which a failed run keeps, and the days between copies.
-# The admin page shows them, because the journal is gone after a reboot and a unit that never ran still reads as a
+# (ok, failed or none) and why, the last good copy and its time, which a failed run keeps, and the days between copies,
+# and adds the run as a line to the record's log (last-offbox.log, last-offsite.log), the last 1000 runs. The admin
+# page shows the records and charts the copies' ages from the logs, because the journal is gone after a reboot and a unit that never ran still reads as a
 # success. Each copy is tried whether the other worked or not, after the copy on the box is made, and either failing
 # fails the unit. BACKUP_DIR and BS3D_API exist for tests/deploy/backup.test.sh.
 set -euo pipefail
@@ -49,13 +50,18 @@ previous() {
 }
 
 # record <record> <days between copies> <result> <detail> [<good copy's time> <good copy>]: written whole and renamed,
-# so a reader never sees half
+# so a reader never sees half. Its log, <record>.log, gets the run as one line, without the detail, and keeps the last
+# 1000: what the admin page charts the copy's age from (#9), since the record holds only the last run
 record() {
-    local ok copy
+    local ok copy attempt
     ok=${5:-$(previous "$1" ok)}
     copy=${6:-$(previous "$1" copy)}
-    printf 'attempt=%s\nresult=%s\ndetail=%s\nok=%s\ncopy=%s\nevery=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$3" "$4" "$ok" "$copy" "$2" > "$1.tmp"
+    attempt=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    printf 'attempt=%s\nresult=%s\ndetail=%s\nok=%s\ncopy=%s\nevery=%s\n' "$attempt" "$3" "$4" "$ok" "$copy" "$2" > "$1.tmp"
     mv -f "$1.tmp" "$1"
+    { tail -n 999 "$1.log" 2> /dev/null || true
+      printf 'attempt=%s result=%s ok=%s every=%s\n' "$attempt" "$3" "$ok" "$2"; } > "$1.log.tmp"
+    mv -f "$1.log.tmp" "$1.log"
 }
 
 # The copy to a drive the Pi mounts, or over rsync: every night
