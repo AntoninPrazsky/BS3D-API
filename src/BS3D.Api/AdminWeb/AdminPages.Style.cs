@@ -102,6 +102,7 @@ public static partial class AdminPages
         svg.chart polyline.line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
         svg.chart .line.c1 { stroke: var(--c1); } svg.chart .line.c2 { stroke: var(--c2); } svg.chart .line.c3 { stroke: var(--c3); }
         svg.chart .line.c4 { stroke: var(--c4); } svg.chart .line.c5 { stroke: var(--c5); } svg.chart .line.c6 { stroke: var(--c6); }
+        svg.chart circle.mark { fill: var(--bad); stroke: var(--surface); stroke-width: 1.5; }
         svg.chart rect:hover, svg.chart circle:hover { opacity: .75; }
         /* A chart across the page keeps its text legible on a phone by scrolling sideways in its panel, as tables do */
         svg.chart.wide { min-width: 44rem; }

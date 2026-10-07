@@ -74,6 +74,22 @@ else fail "the card pulled: result '$(field result)', detail '$(field detail)', 
 if [[ $(copies "$work/backups") -eq 3 ]]; then pass "the card pulled: the copy on the box is still made"
 else fail "the card pulled: $(copies "$work/backups") copies on the box, not 3"; fi
 
+# 3a. The log (#9): each run a line, the failed one keeping the last good copy's time, and the record's attempt its last
+log="$work/backups/last-offbox.log"
+lines=()
+if [[ -f $log ]]; then mapfile -t lines < "$log"; fi
+good_at=$(sed -n 's/.* ok=\([^ ]*\) .*/\1/p' <<< "${lines[1]:-}")
+if [[ ${#lines[@]} -eq 3 && ${lines[0]} == *" result=none ok= every=1" && ${lines[1]} == *" result=ok ok="?*" every=1" \
+    && ${lines[2]} == *" result=failed ok=$good_at every=1" && ${lines[2]} == "attempt=$(field attempt) "* \
+    && $(wc -l < "$work/backups/last-offsite.log") -eq 3 ]]; then
+    pass "each run adds its line to the record's log, a failure keeping the last good copy's time"
+else fail "the log: $(cat "$log" 2> /dev/null || echo none)"; fi
+for i in $(seq 1200); do echo "attempt=2020-01-01T00:00:00Z result=ok ok=2020-01-01T00:00:00Z every=1 #$i"; done > "$log"
+run
+if [[ $(wc -l < "$log") -eq 1000 && $(sed -n 1p "$log") == *" #202" && $(tail -1 "$log") == *" result=none ok=$good_at every=1" ]]; then
+    pass "the log keeps the last 1000 runs, the newest last"
+else fail "the log kept $(wc -l < "$log") lines, from '$(sed -n 1p "$log")' to '$(tail -1 "$log")'"; fi
+
 # 4. A folder target without its drive named, or outside it: refused before anything is copied
 run BACKUP_OFFBOX_TARGET="$work/card/bs3d-api/"
 if [[ $status -ne 0 && $(field detail) == *"BACKUP_OFFBOX_MOUNT"* ]]; then pass "a folder target without BACKUP_OFFBOX_MOUNT is refused"
