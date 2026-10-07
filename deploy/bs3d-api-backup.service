@@ -1,5 +1,6 @@
-# The nightly backup (issue #3), started by bs3d-api-backup.timer. A consistent copy of the live database through
-# SQLite's own backup API (BS3D.Api admin backup), thirty days kept, and one copy off the box when backup.env says where.
+# The nightly backup (issues #3, #6), started by bs3d-api-backup.timer. A consistent copy of the live database through
+# SQLite's own backup API (BS3D.Api admin backup), thirty days kept, one copy off the box and every other day an
+# encrypted one off the site when backup.env says where.
 [Unit]
 Description=BS3D score service backup
 
@@ -12,4 +13,7 @@ Environment=Scores__Database=/var/lib/bs3d-api/scores.db
 Environment=Scores__CeilingsDirectory=/var/lib/bs3d-api/ceilings
 EnvironmentFile=/etc/bs3d-api/env
 EnvironmentFile=-/etc/bs3d-api/backup.env
+# The copy off the site's key, the host's keys and the repository's password: root's files in /etc/credstore, which
+# deploy/backup-offsite.sh writes, handed to this run alone in $CREDENTIALS_DIRECTORY. None there, none imported.
+ImportCredential=bs3d-api-offsite.*
 ExecStart=/opt/bs3d-api/current/deploy/backup.sh
