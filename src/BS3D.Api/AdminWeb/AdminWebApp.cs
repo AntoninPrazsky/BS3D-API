@@ -117,31 +117,31 @@ public static class AdminWebApp
             return Results.StatusCode(StatusCodes.Status303SeeOther);
         });
         app.MapGet("/", (AdminData data) => Results.Content(AdminPages.Overview(data.ReadOverview(), options.Clock.GetUtcNow()), "text/html; charset=utf-8"));
-        app.MapGet("/live", (AdminData data) => Results.Content(AdminPages.Live(data.ReadLive(100)), "text/html; charset=utf-8"));
+        app.MapGet("/live", (AdminData data) => Results.Content(AdminPages.Live(data.ReadLive(100), options.TimeZone), "text/html; charset=utf-8"));
         app.MapGet("/charts", (AdminData data, string? range) => Results.Content(AdminPages.Charts(data.ReadCharts(range)), "text/html; charset=utf-8"));
         app.MapGet("/boards", (AdminData data) =>
         {
             Ceilings ceilings = data.LoadCeilings();
-            return Page(AdminPages.Boards(data.ReadBoards(ceilings), ScoreStore.MonthOf(options.Clock.GetUtcNow()),
+            return Page(AdminPages.Boards(data.ReadBoards(ceilings), ScoreStore.MonthOf(options.Clock.GetUtcNow()), options.TimeZone,
                 ceilings.Count == 0 ? Path.GetFullPath(options.CeilingsDirectory) : null, data.ReadFunnel(ceilings)));
         });
         app.MapGet("/board", (AdminData data, string? file, string? hash, int? rules) =>
             file is { Length: > 0 } && hash is { Length: > 0 } && rules is int r && data.ReadBoard(new BoardKey(file, hash, r), data.LoadCeilings()) is { } board
-                ? Page(AdminPages.Board(board))
+                ? Page(AdminPages.Board(board, options.TimeZone))
                 : Results.NotFound());
         app.MapGet("/players", (AdminData data, string? sort) =>
         {
             string order = sort is not null && AdminData.PlayerOrders.ContainsKey(sort) ? sort : "name";
-            return Page(AdminPages.Players(data.ReadPlayers(order), order));
+            return Page(AdminPages.Players(data.ReadPlayers(order), order, options.TimeZone));
         });
         app.MapGet("/player", (AdminData data, string? id) =>
-            Guid.TryParse(id, out Guid player) && data.ReadPlayer(player) is { } view ? Page(AdminPages.Player(view)) : Results.NotFound());
+            Guid.TryParse(id, out Guid player) && data.ReadPlayer(player) is { } view ? Page(AdminPages.Player(view, options.TimeZone)) : Results.NotFound());
         app.MapGet("/notes", (AdminData data) =>
         {
             (IReadOnlyList<AdminData.NoteRow> notes, int total) = data.ReadNotes();
-            return Page(AdminPages.Notes(notes, total));
+            return Page(AdminPages.Notes(notes, total, options.TimeZone));
         });
-        app.MapGet("/note", (AdminData data, long? id) => id is long n && data.ReadNote(n) is { } note ? Page(AdminPages.Note(note)) : Results.NotFound());
+        app.MapGet("/note", (AdminData data, long? id) => id is long n && data.ReadNote(n) is { } note ? Page(AdminPages.Note(note, options.TimeZone)) : Results.NotFound());
         // A note's picture, served only here: a JPEG the service checked the shape of, sent as one (nosniff is on every answer)
         app.MapGet("/note.jpg", (AdminData data, long? id) =>
             id is long n && data.ReadNotePicture(n) is { } picture ? Results.Bytes(picture, "image/jpeg") : Results.NotFound());

@@ -24,7 +24,7 @@ public sealed class AdminPage : IAsyncDisposable
     public HttpClient Client { get; private set; } = null!;
     public AdminSession Session => App.Services.GetRequiredService<AdminSession>();
 
-    private AdminPage()
+    private AdminPage(TimeZoneInfo? zone)
     {
         Directory.CreateDirectory(_folder);
         Store = new ScoreStore(Path.Combine(_folder, "scores.db"));
@@ -34,14 +34,16 @@ public sealed class AdminPage : IAsyncDisposable
             Database = Path.Combine(_folder, "scores.db"),
             CeilingsDirectory = Path.Combine(_folder, "ceilings"),
             Clock = Clock,
+            // UTC unless a test names a zone, so no page depends on the zone of the machine the tests run on
+            TimeZone = zone ?? TimeZoneInfo.Utc,
             Output = Output,
         };
     }
 
-    /// <summary>A page over a database <paramref name="fill"/> has written.</summary>
-    public static async Task<AdminPage> StartAsync(Action<ScoreStore, SqliteConnection, DateTimeOffset>? fill = null)
+    /// <summary>A page over a database <paramref name="fill"/> has written, showing moments in <paramref name="zone"/> (UTC).</summary>
+    public static async Task<AdminPage> StartAsync(Action<ScoreStore, SqliteConnection, DateTimeOffset>? fill = null, TimeZoneInfo? zone = null)
     {
-        AdminPage page = new();
+        AdminPage page = new(zone);
         if (fill != null)
         {
             using SqliteConnection c = page.Store.Open();

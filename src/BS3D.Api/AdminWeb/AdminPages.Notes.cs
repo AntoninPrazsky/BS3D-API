@@ -9,23 +9,23 @@ namespace BS3D.Api.AdminWeb;
 /// </summary>
 public static partial class AdminPages
 {
-    public static string Notes(IReadOnlyList<AdminData.NoteRow> notes, int total)
+    public static string Notes(IReadOnlyList<AdminData.NoteRow> notes, int total, TimeZoneInfo zone)
     {
         Markup rows = Html.Join(notes.Select(n => Html.M($"""
-            <tr><td class="t"><a href="{NoteLink(n.Id)}">{Stamp(n.At)}</a></td><td>{Who(n)}</td><td><bdi>{n.Level ?? ""}</bdi></td>
+            <tr><td class="t"><a href="{NoteLink(n.Id)}">{Stamp(n.At, zone)}</a></td><td>{Who(n)}</td><td><bdi>{n.Level ?? ""}</bdi></td>
             <td><bdi>{n.Where ?? ""}</bdi></td><td><code>{n.GameVersion}</code></td><td class="n">{(n.PictureBytes > 0 ? Size(n.PictureBytes) : "")}</td>
             <td class="wrap"><a href="{NoteLink(n.Id)}"><bdi>{FirstLine(n.Text)}</bdi></a></td></tr>
             """)));
         Markup body = notes.Count == 0
             ? Html.M($"<p class=\"note\">No notes yet. A player sends one from the game's pause menu, the result page or the main menu (Send a Note).</p>")
             : Html.M($"""
-                <p class="note">{(total > notes.Count ? Html.M($"The newest {notes.Count} of {total}") : Html.M($"{total}"))} notes players wrote in the game, newest first (UTC). Unlinked names are what the note claimed; a linked one is the player's nickname now. Read them on the box with <code>BS3D.Api admin notes --out &lt;folder&gt;</code>, delete one with <code>admin delete-note &lt;id&gt;</code>.</p>
+                <p class="note">{(total > notes.Count ? Html.M($"The newest {notes.Count} of {total}") : Html.M($"{total}"))} notes players wrote in the game, newest first ({ZoneName(zone)}). Unlinked names are what the note claimed; a linked one is the player's nickname now. Read them on the box with <code>BS3D.Api admin notes --out &lt;folder&gt;</code>, delete one with <code>admin delete-note &lt;id&gt;</code>.</p>
                 <div class="panel"><table><tr><th>Received</th><th>From</th><th>Level</th><th>Where</th><th>Game</th><th class="n">Picture</th><th>Note</th></tr>{rows}</table></div>
                 """);
         return Layout("Notes", body, refresh: false);
     }
 
-    public static string Note(AdminData.NoteView v)
+    public static string Note(AdminData.NoteView v, TimeZoneInfo zone)
     {
         AdminData.NoteRow n = v.Note;
         Markup picture = n.PictureBytes == 0 ? Html.M($"<p class=\"note\">No picture: the player unticked it, or the pictures stored had reached their cap.</p>")
@@ -33,7 +33,7 @@ public static partial class AdminPages
         Markup context = v.Context.Count == 0 ? Html.M($"<p class=\"note\">The note carried no context.</p>")
             : Html.M($"""<div class="panel"><table class="facts">{Html.Join(v.Context.Select(f => Html.M($"<tr><th><bdi>{f.Key}</bdi></th><td><bdi>{f.Value}</bdi></td></tr>")))}</table></div>""");
         return Layout($"Note {n.Id}", Html.M($"""
-            <p>{Who(n)} · {Stamp(n.At)} UTC · <code>{n.GameVersion}</code> <code class="id">delete: BS3D.Api admin delete-note {n.Id}</code></p>
+            <p>{Who(n)} · {Stamp(n.At, zone)} {ZoneName(zone)} · <code>{n.GameVersion}</code> <code class="id">delete: BS3D.Api admin delete-note {n.Id}</code></p>
             <div class="panel"><p class="text"><bdi>{n.Text}</bdi></p></div>
             <h2>The picture</h2>{picture}
             <h2>The context</h2>{context}

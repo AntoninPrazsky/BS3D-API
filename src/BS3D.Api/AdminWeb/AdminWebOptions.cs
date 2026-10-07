@@ -14,6 +14,13 @@ public sealed class AdminWebOptions
 
     public TimeProvider Clock { get; init; } = TimeProvider.System;
 
+    /// <summary>
+    /// The zone the page shows a moment in: the Pi's own (Europe/Prague), which .NET reads from /etc/localtime, since the
+    /// runner starts the page with no TZ. Days and months stay UTC, because the boards' months and the refusals' counts
+    /// are kept by UTC day.
+    /// </summary>
+    public TimeZoneInfo TimeZone { get; init; } = TimeZoneInfo.Local;
+
     /// <summary>How long the printed link works.</summary>
     public TimeSpan LinkLifetime { get; init; } = TimeSpan.FromMinutes(5);
 
