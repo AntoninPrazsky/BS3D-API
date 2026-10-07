@@ -155,6 +155,7 @@ public sealed class AdminWebTests
     [InlineData("attempt=2026-09-15T03:31:00Z\nresult=none\ndetail=no target\nok=\ncopy=\n", "<strong>none</strong><small>not set up", "Every backup is on this Pi's own disk")]
     [InlineData("attempt=2026-09-15T03:31:00Z\nresult=ok\ndetail=copied\nok=2026-09-15T03:31:00Z\ncopy=scores-20260915-033100.db\n", "<strong>8 h ago</strong><small>scores-20260915-033100.db</small>", null)]
     [InlineData("attempt=2026-09-12T03:31:00Z\nresult=ok\ndetail=copied\nok=2026-09-12T03:31:00Z\ncopy=scores-20260912-033100.db\n", "<strong>3 d ago</strong>", "The newest copy off the box is from 3 d ago")]
+    [InlineData("attempt=2026-09-13T03:31:00Z\nresult=ok\ndetail=copied\nok=2026-09-13T03:31:00Z\ncopy=scores-20260913-033100.db\nevery=1\n", "<span>Off the box</span><strong>2 d ago</strong>", "The newest copy off the box is from 2 d ago")]
     [InlineData("attempt=2026-09-15T03:31:00Z\nresult=failed\ndetail=no drive is mounted at /mnt/bs3d-backup\nok=2026-09-14T03:31:00Z\ncopy=scores-20260914-033100.db\n",
         "<strong>failed</strong><small>8 h ago: no drive is mounted at /mnt/bs3d-backup</small>", "The last copy off the box failed 8 h ago: no drive is mounted at /mnt/bs3d-backup. The newest good copy is from 1 d ago.")]
     [InlineData("attempt=2026-09-15T03:31:00Z\nresult=failed\ndetail=<b>rsync</b> failed\nok=\ncopy=\n", "<small>8 h ago: &lt;b&gt;rsync&lt;/b&gt; failed</small>", "There is no good copy yet.")]
@@ -166,6 +167,36 @@ public sealed class AdminWebTests
             string backups = Path.Combine(Path.GetDirectoryName(page.Options.Database)!, "backups");
             Directory.CreateDirectory(backups);
             File.WriteAllText(Path.Combine(backups, "last-offbox"), record);
+        }
+        await page.LogInAsync();
+
+        string overview = await page.Client.GetStringAsync("/");
+
+        Assert.Contains(stat, overview);
+        if (warning == null) Assert.DoesNotContain("<p class=\"warn\">", overview);
+        else Assert.Contains(warning, overview);
+    }
+
+    /// <summary>
+    /// The copy off the site (#6), recorded in backups/last-offsite, read on the overview at 2026-09-15 12:00: warned about
+    /// by its own days between copies, so a copy every other day is not late at two days, as the nightly card's would be.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "<span>Off site</span><strong>no record</strong>", null)]
+    [InlineData("attempt=2026-09-15T03:31:00Z\nresult=none\ndetail=no repository\nok=\ncopy=\nevery=2\n", "<span>Off site</span><strong>none</strong><small>not set up: every copy is in this house</small>", "Every backup is in this house")]
+    [InlineData("attempt=2026-09-13T03:31:00Z\nresult=ok\ndetail=snapshot 1a2b3c4d\nok=2026-09-13T03:31:00Z\ncopy=scores-20260913-033100.db\nevery=2\n", "<span>Off site</span><strong>2 d ago</strong><small>scores-20260913-033100.db</small>", null)]
+    [InlineData("attempt=2026-09-12T03:31:00Z\nresult=ok\ndetail=snapshot 1a2b3c4d\nok=2026-09-12T03:31:00Z\ncopy=scores-20260912-033100.db\nevery=2\n", "<span>Off site</span><strong>3 d ago</strong>", "The newest copy off the site is from 3 d ago")]
+    [InlineData("attempt=2026-09-13T03:31:00Z\nresult=ok\ndetail=snapshot 1a2b3c4d\nok=2026-09-13T03:31:00Z\ncopy=scores-20260913-033100.db\nevery=1\n", "<span>Off site</span><strong>2 d ago</strong>", "The newest copy off the site is from 2 d ago")]
+    [InlineData("attempt=2026-09-15T03:31:00Z\nresult=failed\ndetail=restic backup failed with exit code 1: Fatal: wrong password\nok=2026-09-13T03:31:00Z\ncopy=scores-20260913-033100.db\nevery=2\n",
+        "<span>Off site</span><strong>failed</strong><small>8 h ago: restic backup failed with exit code 1: Fatal: wrong password</small>", "The last copy off the site failed 8 h ago: restic backup failed with exit code 1: Fatal: wrong password. The newest good copy is from 2 d ago.")]
+    public async Task The_overview_shows_the_copy_off_the_site_and_warns_by_its_own_days(string? record, string stat, string? warning)
+    {
+        await using AdminPage page = await AdminPage.StartAsync();
+        if (record != null)
+        {
+            string backups = Path.Combine(Path.GetDirectoryName(page.Options.Database)!, "backups");
+            Directory.CreateDirectory(backups);
+            File.WriteAllText(Path.Combine(backups, "last-offsite"), record);
         }
         await page.LogInAsync();
 

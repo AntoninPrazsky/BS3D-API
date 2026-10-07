@@ -11,7 +11,7 @@ public sealed partial class AdminData(AdminWebOptions options)
 {
     public sealed record Overview(
         long SchemaVersion, int Players, int HiddenPlayers, int Submissions, int Unfinished, int HiddenSubmissions,
-        long DatabaseBytes, Backup? NewestBackup, OffBox? LastOffBox, IReadOnlyList<Day> Days, IReadOnlyList<RefusalDay> Refusals,
+        long DatabaseBytes, Backup? NewestBackup, OffBox? LastOffBox, OffBox? LastOffSite, IReadOnlyList<Day> Days, IReadOnlyList<RefusalDay> Refusals,
         int Notes, long NotePictureBytes);
 
     /// <summary>One UTC day: the clears and unfinished attempts (0 stars, #8) accepted, and the players new that day.</summary>
@@ -22,11 +22,12 @@ public sealed partial class AdminData(AdminWebOptions options)
     public sealed record Backup(string Name, long Bytes, DateTimeOffset Written);
 
     /// <summary>
-    /// What <c>deploy/backup.sh</c> recorded in <c>backups/last-offbox</c> about the copy off the box (#6): the last
-    /// attempt and its result (<c>ok</c>, <c>failed</c> or <c>none</c>, no target set up), why, and the last good copy
-    /// and its time, which a failed run keeps.
+    /// What <c>deploy/backup.sh</c> recorded about a copy (#6), the one off the box in <c>backups/last-offbox</c> or the
+    /// one off the site in <c>backups/last-offsite</c>: the last attempt and its result (<c>ok</c>, <c>failed</c> or
+    /// <c>none</c>, not set up), why, the last good copy and its time, which a failed run keeps, and the days between
+    /// copies (1, nightly, in a record written before it was recorded).
     /// </summary>
-    public sealed record OffBox(DateTimeOffset? Attempt, string Result, string Detail, DateTimeOffset? Ok, string? Copy);
+    public sealed record OffBox(DateTimeOffset? Attempt, string Result, string Detail, DateTimeOffset? Ok, string? Copy, int Every);
 
     /// <summary>One line of the live view: an accepted submission (a clear or an unfinished attempt) or a refusal.</summary>
     public sealed record Event(DateTimeOffset At, bool Accepted, string What, string Detail);
@@ -80,7 +81,8 @@ public sealed partial class AdminData(AdminWebOptions options)
             (int)Scalar(c, "SELECT COUNT(*) FROM submissions s JOIN players p ON p.id = s.player_id WHERE p.hidden = 1"),
             FileBytes(options.Database) + FileBytes(options.Database + "-wal"),
             NewestBackup(),
-            LastOffBox(),
+            CopyRecord("last-offbox"),
+            CopyRecord("last-offsite"),
             days.OrderByDescending(d => d.Key).Select(d => new Day(d.Key, d.Value.Clears, d.Value.Unfinished, d.Value.Players)).ToList(),
             refusals,
             notes ? (int)Scalar(c, "SELECT COUNT(*) FROM notes") : 0,
@@ -131,13 +133,13 @@ public sealed partial class AdminData(AdminWebOptions options)
         }
     }
 
-    /// <summary><c>last-offbox</c> read as its <c>key=value</c> lines; null when there is none or it cannot be read.</summary>
-    private OffBox? LastOffBox()
+    /// <summary>A copy's record read as its <c>key=value</c> lines; null when there is none or it cannot be read.</summary>
+    private OffBox? CopyRecord(string name)
     {
         Dictionary<string, string> fields;
         try
         {
-            fields = File.ReadLines(Path.Combine(BackupFolder, "last-offbox")).Take(20)
+            fields = File.ReadLines(Path.Combine(BackupFolder, name)).Take(20)
                 .Select(line => line.Split('=', 2)).Where(kv => kv.Length == 2)
                 .GroupBy(kv => kv[0]).ToDictionary(g => g.Key, g => g.First()[1]);
         }
@@ -150,7 +152,8 @@ public sealed partial class AdminData(AdminWebOptions options)
             DateTimeOffset.TryParse(stamp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTimeOffset at) ? at : null;
         return new OffBox(When(fields.GetValueOrDefault("attempt")), fields.GetValueOrDefault("result") ?? "unknown",
             fields.GetValueOrDefault("detail") ?? "", When(fields.GetValueOrDefault("ok")),
-            fields.GetValueOrDefault("copy") is { Length: > 0 } copy ? copy : null);
+            fields.GetValueOrDefault("copy") is { Length: > 0 } copy ? copy : null,
+            int.TryParse(fields.GetValueOrDefault("every"), NumberStyles.None, CultureInfo.InvariantCulture, out int every) && every is >= 1 and <= 999 ? every : 1);
     }
 
     private static long FileBytes(string path) => File.Exists(path) ? new FileInfo(path).Length : 0;

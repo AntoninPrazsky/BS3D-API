@@ -95,9 +95,24 @@ From then on every nightly copy also goes to `/mnt/bs3d-backup/bs3d-api/`. Copie
 
 **Boot order:** the Pi 5 looks for a system on a card in the slot before the NVMe (`BOOT_ORDER=0xf461` here). This card holds none, so the Pi boots from the NVMe as before. Never leave a card with Raspberry Pi OS on it in the slot.
 
-**What the card does not cover:** it survives the NVMe failing, not the Pi lost or the house burnt. An encrypted off-site copy is the next step in #6. A target over SSH also works (`BACKUP_OFFBOX_TARGET=user@host:/backups/bs3d-api/`, by `rsync`, with a key for the `bs3d-api` user the host accepts), but not to Windows, which has no `rsync`.
+**What the card does not cover:** it survives the NVMe failing, not the Pi lost or the house burnt. The copy off the site, below, covers those. A target over SSH also works for `BACKUP_OFFBOX_TARGET` (`user@host:/backups/bs3d-api/`, by `rsync`, with a key for the `bs3d-api` user the host accepts), but not to Windows, which has no `rsync`.
 
-Run a backup by hand with `sudo systemctl start bs3d-api-backup`. Read what it did with `journalctl -u bs3d-api-backup -n 20` and `sudo cat /var/lib/bs3d-api/backups/last-offbox`.
+#### The copy off the site
+
+Every other day the newest copy also leaves the house, encrypted on the Pi by restic, for a restic repository over SFTP: on the owner's web hosting, in an account of its own that sees only its folder, so the host holds nothing it can read. Set it up once:
+
+```bash
+sudo apt install restic
+sudo /opt/bs3d-api/current/deploy/backup-offsite.sh 'sftp://<account>@<host>:<port>//<folder>'
+```
+
+- **Two passwords:** the hosting account's, used once to put the Pi's key on the account, and the repository's, which encrypts every copy. **Keep both, and the address above, somewhere other than the Pi**, a password manager say: with the Pi gone, they are what reads the copies. The script reads each from a root-only file when it is there (`/etc/bs3d-api/offsite-sftp-password`, `/etc/bs3d-api/offsite-restic-password`), asks for it when it is not, and deletes the files once it has worked.
+- **A key of its own:** it records the host's keys, trusted on first use (it prints their fingerprints). It makes an ed25519 key and puts its public half where the hosting's ProFTPD `mod_sftp` reads it: `.sftp/authorized_keys` in the account's folder, in RFC 4716 form. From then on only the key logs in, and a host whose key has changed is refused.
+- **Root's files, the backup's for its run:** the key, the host's keys and the repository's password go in `/etc/credstore/bs3d-api-offsite.*`, root's and 0600. `bs3d-api-backup.service` imports them (`ImportCredential=`) for its run alone, so the public service, which runs as `bs3d-api` too, never has them. `BACKUP_OFFSITE_REPOSITORY` goes in `backup.env`. Then it runs one backup and shows the result.
+
+A copy goes when the last good one is two days old, less half a day for the timer's jitter, so a failed one is tried again the next night; `BACKUP_OFFSITE_EVERY_DAYS` in `backup.env` changes the days. The repository keeps a copy a day for 30 days and one a month for 12 months (restic also keeps the oldest while there are fewer). Each result is recorded in `/var/lib/bs3d-api/backups/last-offsite`, and the admin page's overview shows it beside the card's. It warns when none is set up, when the last copy failed, or when the newest is older than its days and one more. Each copy is tried whether the other worked or not, and either failing fails the run. `--remove` stops the copies; the repository on the host stays.
+
+Run a backup by hand with `sudo systemctl start bs3d-api-backup`. Read what it did with `journalctl -u bs3d-api-backup -n 30`, `sudo cat /var/lib/bs3d-api/backups/last-offbox` and `sudo cat /var/lib/bs3d-api/backups/last-offsite`.
 
 To restore:
 
@@ -107,6 +122,13 @@ sudo cp /var/lib/bs3d-api/backups/scores-<time>.db /var/lib/bs3d-api/scores.db  
 sudo rm -f /var/lib/bs3d-api/scores.db-wal /var/lib/bs3d-api/scores.db-shm
 sudo chown bs3d-api:bs3d-api /var/lib/bs3d-api/scores.db
 sudo systemctl start bs3d-api
+```
+
+From the copy off the site, on any machine with restic: ssh asks for the account's password, and restic for the repository's. The copy lands in `restored/var/lib/bs3d-api/backups/`; then restore it as above.
+
+```bash
+restic -r 'sftp://<account>@<host>:<port>//<folder>' snapshots
+restic -r 'sftp://<account>@<host>:<port>//<folder>' restore latest --target restored
 ```
 
 ### Administration
@@ -181,4 +203,4 @@ What this Pi has beyond a fresh Raspberry Pi OS, each with its check:
 
 ## Developing
 
-See `CLAUDE.md`. What the service answers is contract v1 (BS3D#542), plus `GET /v1/boards` since #7, the summary of every board the game's High Scores screen asks for, since #8 unfinished attempts (0 stars), ranked below every clear and shown only for a player who has never cleared the board, and since #10 `POST /v1/notes`, a player's note from the game's Send a Note (BS3D#813) with its context and, unless they unticked it, a JPEG of the frame. `dotnet test BS3D.Api.slnx`, and for the deploy scripts `shellcheck deploy/*.sh tests/deploy/*.sh`, `sudo tests/deploy/tunnel-token.test.sh`, `sudo tests/deploy/install-admin.test.sh`, `sudo tests/deploy/update.test.sh`, `sudo tests/deploy/firewall.test.sh`, `sudo tests/deploy/backup.test.sh` and `sudo tests/deploy/backup-card.test.sh` (Linux; all but the first also run without sudo, as `unshare -r`, and the firewall's as `unshare -rn`); a local run the game can submit to is `dotnet run --project src/BS3D.Api --urls http://localhost:5000` with `"server": "http://localhost:5000"` in the game's `Settings.json`.
+See `CLAUDE.md`. What the service answers is contract v1 (BS3D#542), plus `GET /v1/boards` since #7, the summary of every board the game's High Scores screen asks for, since #8 unfinished attempts (0 stars), ranked below every clear and shown only for a player who has never cleared the board, and since #10 `POST /v1/notes`, a player's note from the game's Send a Note (BS3D#813) with its context and, unless they unticked it, a JPEG of the frame. `dotnet test BS3D.Api.slnx`, and for the deploy scripts `shellcheck deploy/*.sh tests/deploy/*.sh`, `sudo tests/deploy/tunnel-token.test.sh`, `sudo tests/deploy/install-admin.test.sh`, `sudo tests/deploy/update.test.sh`, `sudo tests/deploy/firewall.test.sh`, `sudo tests/deploy/backup.test.sh`, `sudo tests/deploy/backup-card.test.sh` and `sudo tests/deploy/backup-offsite.test.sh` (Linux; the backup's two need restic and sftp-server; all but the first also run without sudo, as `unshare -r`, and the firewall's as `unshare -rn`); a local run the game can submit to is `dotnet run --project src/BS3D.Api --urls http://localhost:5000` with `"server": "http://localhost:5000"` in the game's `Settings.json`.
