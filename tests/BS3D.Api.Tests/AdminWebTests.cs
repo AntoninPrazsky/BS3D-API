@@ -207,6 +207,65 @@ public sealed class AdminWebTests
         else Assert.Contains(warning, overview);
     }
 
+    /// <summary>
+    /// A moment reads in the page's zone, the Pi's own, its summer time included: noon UTC is 14:00 in Prague in September
+    /// and 13:00 in January. Every label names the zone; days stay UTC days.
+    /// </summary>
+    [Theory]
+    [InlineData("Etc/UTC", "UTC", "2026-09-15 12:00:00", "2026-01-15 12:00:00")]
+    [InlineData("Europe/Prague", "Prague time", "2026-09-15 14:00:00", "2026-01-15 13:00:00")]
+    [InlineData("America/New_York", "New York time", "2026-09-15 08:00:00", "2026-01-15 07:00:00")]
+    public async Task The_live_view_reads_in_the_pages_zone(string zoneId, string label, string summer, string winter)
+    {
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            Guid ann = AdminPage.AddPlayer(store, c, now.AddMonths(-8), "Ann");
+            AdminPage.AddClear(store, c, now.AddMonths(-8), ann, 1000);
+            AdminPage.AddClear(store, c, now, ann, 1500);
+        }, TimeZoneInfo.FindSystemTimeZoneById(zoneId));
+        await page.LogInAsync();
+
+        string live = await page.Client.GetStringAsync("/live");
+
+        Assert.Contains($"<th>When ({label})</th>", live);
+        Assert.Contains(summer, live);
+        Assert.Contains(winter, live);
+    }
+
+    [Fact]
+    public async Task Every_page_with_a_moment_reads_it_in_prague_time_and_days_stay_utc()
+    {
+        Guid ann = Guid.Empty;
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            ann = AdminPage.AddPlayer(store, c, now.AddMonths(-8), "Ann");
+            AdminPage.AddClear(store, c, now.AddMonths(-8), ann, 1000);
+            AdminPage.AddClear(store, c, now, ann, 1500);
+        }, TimeZoneInfo.FindSystemTimeZoneById("Europe/Prague"));
+        await page.LogInAsync();
+
+        string player = await page.Client.GetStringAsync($"/player?id={ann}");
+        Assert.Contains("<tr><th>Created</th><td>2026-01-15 13:00 Prague time</td></tr>", player);
+        Assert.Contains("<th>When (Prague time)</th>", player);
+        Assert.Contains("<td class=\"t\">2026-09-15 14:00</td>", player);
+
+        string players = await page.Client.GetStringAsync("/players");
+        Assert.Contains("Created (Prague time)", players);
+        Assert.Contains("Last played (Prague time)", players);
+        Assert.Contains("<td class=\"t\">2026-01-15 13:00</td>", players);
+
+        string boards = await page.Client.GetStringAsync("/boards");
+        Assert.Contains("<th>Last played (Prague time)</th>", boards);
+
+        string board = await page.Client.GetStringAsync($"/board?file={Uri.EscapeDataString(Api.File)}&hash={Api.Hash}&rules={Api.Rules}");
+        Assert.Contains("<th>Sent (Prague time)</th>", board);
+        Assert.Contains("<td class=\"t\">2026-09-15 14:00</td>", board);
+
+        string overview = await page.Client.GetStringAsync("/");
+        Assert.Contains("The last 14 days (UTC)", overview);
+        Assert.DoesNotContain("12:00", player + players + board);
+    }
+
     [Fact]
     public async Task The_overview_and_the_live_view_show_what_the_database_holds()
     {

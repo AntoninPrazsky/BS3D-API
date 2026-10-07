@@ -92,11 +92,11 @@ public static partial class AdminPages
         };
     }
 
-    public static string Live(IReadOnlyList<AdminData.Event> events) =>
+    public static string Live(IReadOnlyList<AdminData.Event> events, TimeZoneInfo zone) =>
         Layout("Live", Html.M($"""
             <p class="note">The newest {events.Count} accepted submissions (clears and unfinished attempts) and refusals, newest first. Reloads every 5 seconds.</p>
-            <div class="panel"><table><tr><th>When (UTC)</th><th>Result</th><th>What</th><th>Detail</th></tr>{Html.Join(events.Select(e => Html.M($"""
-                <tr class="{(e.Accepted ? "ok" : "refused")}"><td class="t">{e.At:yyyy-MM-dd HH:mm:ss}</td><td>{(e.Accepted ? Html.M($"<span class=\"chip ok\">accepted</span>") : Html.M($"<span class=\"chip bad\">refused</span>"))}</td><td><bdi>{e.What}</bdi></td><td><bdi>{e.Detail}</bdi></td></tr>
+            <div class="panel"><table><tr><th>When ({ZoneName(zone)})</th><th>Result</th><th>What</th><th>Detail</th></tr>{Html.Join(events.Select(e => Html.M($"""
+                <tr class="{(e.Accepted ? "ok" : "refused")}"><td class="t">{Stamp(e.At, zone, seconds: true)}</td><td>{(e.Accepted ? Html.M($"<span class=\"chip ok\">accepted</span>") : Html.M($"<span class=\"chip bad\">refused</span>"))}</td><td><bdi>{e.What}</bdi></td><td><bdi>{e.Detail}</bdi></td></tr>
                 """)))}</table></div>
             """), refresh: true);
 
