@@ -4,6 +4,13 @@
 # site, because the disk dying is the failure a backup on the same disk does not survive, and the house burning the one
 # a card in the Pi does not. Restore is copying a backup to /var/lib/bs3d-api/scores.db with the service stopped.
 #
+# The notes' pictures (#12) are files beside the database, not in it, so none of these copies holds them. A card gets one
+# copy of each, in note-pictures/ beside the database's copies, brought up to date every night by
+# `BS3D.Api admin mirror-pictures`, which deletes a copy only when its note is gone from the database: a mirror of the
+# folder (rsync --delete) would empty the card the night after a database restored from it. The owner's decision
+# (2026-10-08): the card only, never an rsync destination over SSH, and never off the site. Restore is copying that
+# folder back to /var/lib/bs3d-api/note-pictures, owned by bs3d-api.
+#
 # backup.env is root's, read by systemd before it drops to bs3d-api; deploy/backup-card.sh writes it for a card, and
 # deploy/backup-offsite.sh for the copy off the site:
 #   BACKUP_OFFBOX_TARGET       where the copy goes: a folder on a drive the Pi mounts (/mnt/bs3d-backup/bs3d-api/), or
@@ -93,10 +100,15 @@ offbox() {
     rsync --timeout=60 "$target" "$offbox" || fail "rsync to $offbox failed with exit code $?"
 
     if $local_folder; then
+        # The notes' pictures, on the card only (#12): before the sync, which then covers them too
+        "$API" admin mirror-pictures "$real_offbox/note-pictures" \
+            || fail "the database's copy is on the drive, but the note pictures' copy failed with exit code $?"
         # On the card before the run says so, and its old copies pruned as the box's are
         sync -f "$real_offbox" || fail "the copy did not reach the drive at $mount (sync failed)"
         find "$real_offbox" -maxdepth 1 -name 'scores-*.db' -type f -mtime +"$OFFBOX_KEEP_DAYS" -print -delete \
             || fail "the copy is on the drive, but its old copies could not be deleted"
+    else
+        echo "the note pictures go to a drive the Pi mounts only: none were copied to $offbox"
     fi
     record "$status" 1 ok "copied to $offbox" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name"
     echo "copied off the box to $offbox"

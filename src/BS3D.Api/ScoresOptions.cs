@@ -104,9 +104,11 @@ public sealed class ScoresOptions
     public int NotesMaxStored { get; set; } = 5000;
 
     /// <summary>
-    /// The pictures stored together, at most, as files in <c>note-pictures</c> beside the database (no backup copies
-    /// them). Past it a note is still kept, without its picture, and its answer says so: the owner reads the notes and
-    /// deletes old ones (<c>admin delete-note</c>) to make room.
+    /// The pictures stored together, at most, as files in <c>note-pictures</c> beside the database, of which the backup
+    /// keeps one copy on the card and none off the site (#12). Past it a note is still kept, without its picture, and its
+    /// answer says so: the owner reads the notes and deletes old ones (<c>admin delete-note</c>) to make room. 10 GiB, the
+    /// owner's figure for the card and the Pi's disk (2026-10-08, it was 512 MiB): above what <see cref="NotesMaxStored"/>
+    /// notes of <see cref="NoteMaxPictureBytes"/> each can fill, about 1.9 GiB, so it is the notes' cap that binds.
     /// </summary>
-    public long NotesMaxStoredPictureBytes { get; set; } = 512L << 20;
+    public long NotesMaxStoredPictureBytes { get; set; } = 10L << 30;
 }
