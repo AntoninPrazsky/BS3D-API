@@ -318,6 +318,183 @@ public sealed class NoteTests
         }
     }
 
+    // The backup's copy of the pictures on the card (#12): ScoreStore.MirrorPictures, which backup.sh runs as
+    // `admin mirror-pictures <card>/note-pictures`
+
+    private static string ScratchFolder() => Path.Combine(Path.GetTempPath(), "bs3d-api-tests", Guid.NewGuid().ToString("N"));
+
+    private static ScoreStore.PictureMirror Mirror(Api api, string folder)
+    {
+        using SqliteConnection c = api.Store.Open();
+        return api.Store.MirrorPictures(c, folder);
+    }
+
+    [Fact]
+    public void The_mirror_copies_each_picture_once_and_a_note_without_one_adds_nothing()
+    {
+        using Api api = new();
+        string folder = ScratchFolder();
+        try
+        {
+            long first, second;
+            using (SqliteConnection c = api.Store.Open())
+            {
+                first = AddNote(api.Store, c, api.Clock.GetUtcNow(), "first", picture: Jpeg(body: 1000));
+                second = AddNote(api.Store, c, api.Clock.GetUtcNow(), "second", picture: Jpeg(body: 2000));
+                AddNote(api.Store, c, api.Clock.GetUtcNow(), "no picture");
+            }
+
+            ScoreStore.PictureMirror once = Mirror(api, folder);
+            Assert.Equal((2, 0, 0, 0, 2, (long)(Jpeg(body: 1000).Length + Jpeg(body: 2000).Length)),
+                (once.Copied, once.Deleted, once.Kept, once.Missing, once.Files, once.Bytes));
+            Assert.Equal(Jpeg(body: 1000), File.ReadAllBytes(Path.Combine(folder, $"{first}.jpg")));
+            Assert.Equal(Jpeg(body: 2000), File.ReadAllBytes(Path.Combine(folder, $"{second}.jpg")));
+            Assert.Equal(2, Directory.GetFiles(folder).Length);
+
+            ScoreStore.PictureMirror twice = Mirror(api, folder);
+            Assert.Equal((0, 0, 2), (twice.Copied, twice.Deleted, twice.Kept));
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void The_mirror_deletes_the_copy_of_a_deleted_note_and_of_a_removed_player_s()
+    {
+        using Api api = new();
+        string folder = ScratchFolder();
+        try
+        {
+            Guid player = Guid.NewGuid();
+            long kept, deleted, removed;
+            using (SqliteConnection c = api.Store.Open())
+            {
+                Command(c, $"INSERT INTO players (id, name, token_hash, created_at) VALUES ('{player}', 'Leaver', 'x', '2026-09-01T00:00:00Z')");
+                kept = AddNote(api.Store, c, api.Clock.GetUtcNow(), "kept", picture: Jpeg());
+                deleted = AddNote(api.Store, c, api.Clock.GetUtcNow(), "deleted", picture: Jpeg());
+                removed = AddNote(api.Store, c, api.Clock.GetUtcNow(), "the leaver's", player: player, picture: Jpeg());
+            }
+            Mirror(api, folder);
+
+            Assert.Equal(0, AdminCli.Run(["delete-note", deleted.ToString()], api.Store, new ScoresOptions(), new StringWriter()));
+            using (SqliteConnection c = api.Store.Open()) api.Store.DeletePlayer(c, player);
+            ScoreStore.PictureMirror after = Mirror(api, folder);
+
+            Assert.Equal((0, 2, 1, 1), (after.Copied, after.Deleted, after.Kept, after.Files));
+            Assert.True(File.Exists(Path.Combine(folder, $"{kept}.jpg")));
+            Assert.False(File.Exists(Path.Combine(folder, $"{deleted}.jpg")));
+            Assert.False(File.Exists(Path.Combine(folder, $"{removed}.jpg")));
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Pictures_missing_on_the_box_delete_nothing_from_the_mirror()
+    {
+        using Api api = new();
+        string folder = ScratchFolder();
+        try
+        {
+            long first, second;
+            using (SqliteConnection c = api.Store.Open())
+            {
+                first = AddNote(api.Store, c, api.Clock.GetUtcNow(), "first", picture: Jpeg());
+                second = AddNote(api.Store, c, api.Clock.GetUtcNow(), "second", picture: Jpeg());
+            }
+            Mirror(api, folder);
+
+            // The disk died and the database came back from the card: the service has its notes and no pictures
+            Directory.Delete(api.Store.PicturesDirectory, recursive: true);
+            long third;
+            using (SqliteConnection c = api.Store.Open())
+                third = AddNote(api.Store, c, api.Clock.GetUtcNow(), "third", picture: Jpeg());
+            File.Delete(api.Store.PicturePath(third));
+            ScoreStore.PictureMirror after = Mirror(api, folder);
+
+            Assert.Equal((0, 0, 2, 1, 2), (after.Copied, after.Deleted, after.Kept, after.Missing, after.Files));
+            Assert.Equal(Jpeg(), File.ReadAllBytes(Path.Combine(folder, $"{first}.jpg")));
+            Assert.Equal(Jpeg(), File.ReadAllBytes(Path.Combine(folder, $"{second}.jpg")));
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void A_copy_of_the_wrong_size_is_copied_again_and_only_the_mirror_s_own_files_are_touched()
+    {
+        using Api api = new();
+        string folder = ScratchFolder();
+        try
+        {
+            long id;
+            using (SqliteConnection c = api.Store.Open())
+                id = AddNote(api.Store, c, api.Clock.GetUtcNow(), "cut short", picture: Jpeg());
+            Directory.CreateDirectory(folder);
+            File.WriteAllBytes(Path.Combine(folder, $"{id}.jpg"), Jpeg()[..100]);
+            File.WriteAllBytes(Path.Combine(folder, "99.jpg.tmp"), [1, 2, 3]);
+            File.WriteAllText(Path.Combine(folder, "notes.txt"), "the owner's");
+            File.WriteAllText(Path.Combine(folder, "007.jpg"), "not a name the mirror writes");
+            File.WriteAllText(Path.Combine(folder, "98.jpeg"), "nor this");
+
+            ScoreStore.PictureMirror after = Mirror(api, folder);
+
+            Assert.Equal((1, 0, 1), (after.Copied, after.Deleted, after.Files));
+            Assert.Equal(Jpeg(), File.ReadAllBytes(Path.Combine(folder, $"{id}.jpg")));
+            Assert.False(File.Exists(Path.Combine(folder, "99.jpg.tmp")));
+            Assert.True(File.Exists(Path.Combine(folder, "notes.txt")));
+            Assert.True(File.Exists(Path.Combine(folder, "007.jpg")));
+            Assert.True(File.Exists(Path.Combine(folder, "98.jpeg")));
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void The_admin_cli_mirrors_the_pictures_and_refuses_the_service_s_own_folder()
+    {
+        using Api api = new();
+        string folder = ScratchFolder();
+        try
+        {
+            long id;
+            using (SqliteConnection c = api.Store.Open())
+                id = AddNote(api.Store, c, api.Clock.GetUtcNow(), "one", picture: Jpeg());
+
+            StringWriter output = new();
+            Assert.Equal(0, AdminCli.Run(["mirror-pictures", folder], api.Store, new ScoresOptions(), output));
+            Assert.Equal($"note pictures in {folder}: 1 copied, 0 deleted, 0 kept, 0 missing on the box; 1 files, 0.0 MB",
+                output.ToString().Trim());
+            Assert.True(File.Exists(Path.Combine(folder, $"{id}.jpg")));
+
+            StringWriter own = new();
+            File.WriteAllBytes(Path.Combine(api.Store.PicturesDirectory, "5.jpg"), Jpeg());
+            Assert.Equal(2, AdminCli.Run(["mirror-pictures", api.Store.PicturesDirectory + Path.DirectorySeparatorChar], api.Store,
+                new ScoresOptions(), own));
+            Assert.Contains("where the service keeps the pictures", own.ToString());
+            Assert.True(File.Exists(Path.Combine(api.Store.PicturesDirectory, "5.jpg")));
+        }
+        finally
+        {
+            if (Directory.Exists(folder)) Directory.Delete(folder, recursive: true);
+        }
+    }
+
+    private static void Command(SqliteConnection c, string sql)
+    {
+        using SqliteCommand cmd = c.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
     private static long AddNote(ScoreStore store, SqliteConnection c, DateTimeOffset now, string text, Guid? player = null,
         string? claimed = null, byte[]? picture = null, string ipHash = "1PHASH0000000000", string? context = null) =>
         store.InsertNote(c, new ScoreStore.NewNote(Guid.NewGuid(), now, player, null, null, claimed, text, "v0.3.5",

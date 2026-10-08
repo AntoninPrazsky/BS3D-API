@@ -23,11 +23,20 @@ work=$(mktemp -d)
 trap 'umount "$work/card" 2> /dev/null; rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/card"
 
+# mirror-pictures (#12) records where it was asked to copy, and whether the database's copy was there before it, and
+# plants a picture, so a copy off the site that took the card's folder would be seen; MIRROR_FAIL makes it fail
 cat > "$work/bin/BS3D.Api" << 'EOF'
 #!/bin/sh
 case "$2" in
     backup) echo "a copy of the database" > "$3" ;;
     count) echo "players 2 submissions 11" ;;
+    mirror-pictures)
+        newest=$(find "$BACKUP_DIR" -maxdepth 1 -name 'scores-*.db' -printf '%f\n' | sort | tail -1)
+        if [ -f "$(dirname "$3")/$newest" ]; then echo "$3" >> "$BACKUP_DIR/../mirrored"
+        else echo "before the database's copy: $3" >> "$BACKUP_DIR/../mirrored"; fi
+        [ -z "${MIRROR_FAIL:-}" ] || exit 3
+        mkdir -p "$3" && echo "a picture" > "$3/1.jpg"
+        echo "note pictures in $3: 1 copied, 0 deleted, 0 kept, 0 missing on the box; 1 files, 0.0 MB" ;;
 esac
 EOF
 chmod +x "$work/bin/BS3D.Api"
@@ -50,6 +59,8 @@ card=(BACKUP_OFFBOX_MOUNT="$work/card" BACKUP_OFFBOX_TARGET="$work/card/bs3d-api
 run
 if [[ $status -eq 0 && $(copies "$work/backups") -eq 1 && $(field result) == none ]]; then pass "without a target: a copy on the box, and last-offbox says none"
 else fail "without a target: exit $status, $(copies "$work/backups") copies, result '$(field result)'"; fi
+if [[ ! -e "$work/mirrored" ]]; then pass "without a target: no picture is copied anywhere"
+else fail "without a target: the pictures were copied to $(cat "$work/mirrored")"; fi
 if [[ $(site result) == none && $(site every) == 2 ]]; then pass "without a repository: last-offsite says none"
 else fail "without a repository: last-offsite result '$(site result)', every '$(site every)'"; fi
 
@@ -61,6 +72,38 @@ run "${card[@]}"
 good=$(field copy)
 if [[ $status -eq 0 && -f "$work/card/bs3d-api/$good" && $(field result) == ok && -n $(field ok) ]]; then pass "the card mounted: the copy on it, and last-offbox names it"
 else fail "the card mounted: exit $status, result '$(field result)', copy '$good': $(cat "$work/out")"; fi
+if [[ $(cat "$work/mirrored" 2> /dev/null) == "$work/card/bs3d-api/note-pictures" ]]; then pass "the card mounted: the note pictures are copied into its note-pictures, after the database"
+else fail "the card mounted: the pictures' copy went to '$(cat "$work/mirrored" 2> /dev/null)'"; fi
+
+# 2a. A copy of the note pictures that fails fails the card's copy, and says the database's copy is there (#12)
+sleep 1
+run "${card[@]}" MIRROR_FAIL=1
+newest_box=$(find "$work/backups" -maxdepth 1 -name 'scores-*.db' -printf '%f\n' | sort | tail -1)
+if [[ $status -ne 0 && $(field result) == failed && $(field detail) == *"note pictures"* && $(field copy) == "$good" \
+    && -f "$work/card/bs3d-api/$newest_box" ]]; then
+    pass "a copy of the pictures that fails: the run fails, last-offbox says so, and the database's copy is on the card"
+else fail "a failing copy of the pictures: exit $status, result '$(field result)', detail '$(field detail)'"; fi
+
+# 2b. An rsync destination over SSH gets the database's copy and no pictures: the owner's decision, the card only. The
+# stand-in for ssh runs rsync's remote end here, as the host would
+cat > "$work/bin/ssh" << 'EOF'
+#!/bin/sh
+while [ $# -gt 0 ]; do case "$1" in -l|-p|-i|-o) shift 2 ;; -*) shift ;; *) shift; break ;; esac; done
+exec sh -c "$*"
+EOF
+chmod +x "$work/bin/ssh"
+mkdir -p "$work/over-ssh"
+: > "$work/mirrored"
+sleep 1
+run BACKUP_OFFBOX_TARGET="backup.example:$work/over-ssh/"
+if [[ $status -eq 0 && $(copies "$work/over-ssh") -eq 1 && ! -s "$work/mirrored" && ! -e "$work/over-ssh/note-pictures" \
+    && $(cat "$work/out") == *"a drive the Pi mounts only"* ]]; then
+    pass "an rsync destination over SSH: the database's copy, and no pictures"
+else fail "an rsync destination over SSH: exit $status, $(copies "$work/over-ssh") copies, pictures to '$(cat "$work/mirrored")': $(cat "$work/out")"; fi
+rm "$work/bin/ssh"
+sleep 1
+run "${card[@]}"
+good=$(field copy)
 
 # 3. The card pulled: the run fails, the empty mount point stays empty, and the record keeps the last good copy
 umount "$work/card"
@@ -71,17 +114,17 @@ if [[ -z $(ls -A "$work/card") ]]; then pass "the card pulled: nothing is writte
 else fail "the card pulled: the mount point holds $(ls -A "$work/card")"; fi
 if [[ $(field result) == failed && $(field detail) == *"no drive is mounted"* && $(field copy) == "$good" ]]; then pass "the card pulled: last-offbox says why, and keeps the last good copy"
 else fail "the card pulled: result '$(field result)', detail '$(field detail)', copy '$(field copy)' (was '$good')"; fi
-if [[ $(copies "$work/backups") -eq 3 ]]; then pass "the card pulled: the copy on the box is still made"
-else fail "the card pulled: $(copies "$work/backups") copies on the box, not 3"; fi
+if [[ $(copies "$work/backups") -eq 6 ]]; then pass "the card pulled: the copy on the box is still made"
+else fail "the card pulled: $(copies "$work/backups") copies on the box, not 6"; fi
 
 # 3a. The log (#9): each run a line, the failed one keeping the last good copy's time, and the record's attempt its last
 log="$work/backups/last-offbox.log"
 lines=()
 if [[ -f $log ]]; then mapfile -t lines < "$log"; fi
-good_at=$(sed -n 's/.* ok=\([^ ]*\) .*/\1/p' <<< "${lines[1]:-}")
-if [[ ${#lines[@]} -eq 3 && ${lines[0]} == *" result=none ok= every=1" && ${lines[1]} == *" result=ok ok="?*" every=1" \
-    && ${lines[2]} == *" result=failed ok=$good_at every=1" && ${lines[2]} == "attempt=$(field attempt) "* \
-    && $(wc -l < "$work/backups/last-offsite.log") -eq 3 ]]; then
+good_at=$(sed -n 's/.* ok=\([^ ]*\) .*/\1/p' <<< "${lines[4]:-}")
+if [[ ${#lines[@]} -eq 6 && ${lines[0]} == *" result=none ok= every=1" && ${lines[4]} == *" result=ok ok="?*" every=1" \
+    && ${lines[5]} == *" result=failed ok=$good_at every=1" && ${lines[5]} == "attempt=$(field attempt) "* \
+    && $(wc -l < "$work/backups/last-offsite.log") -eq 6 ]]; then
     pass "each run adds its line to the record's log, a failure keeping the last good copy's time"
 else fail "the log: $(cat "$log" 2> /dev/null || echo none)"; fi
 for i in $(seq 1200); do echo "attempt=2020-01-01T00:00:00Z result=ok ok=2020-01-01T00:00:00Z every=1 #$i"; done > "$log"
@@ -163,6 +206,9 @@ rm -rf "$work/restored"
 rs restore latest --target "$work/restored" > /dev/null 2>&1 || true
 if cmp -s "$work/backups/$(site copy)" "$work/restored$work/backups/$(site copy)"; then pass "the copy off the site restores byte for byte"
 else fail "the copy off the site did not restore as it was taken"; fi
+if [[ -f "$work/card/bs3d-api/note-pictures/1.jpg" && -z $(find "$work/restored" \( -name '*.jpg' -o -name note-pictures \)) ]]; then
+    pass "the copy off the site holds the database alone, none of the card's pictures (#12)"
+else fail "the copy off the site: $(find "$work/restored" | tr '\n' ' ')"; fi
 
 # 8. Every other day: the next night is not due, a day and a half later is
 attempt=$(site attempt)

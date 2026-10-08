@@ -13,8 +13,8 @@ namespace BS3D.Api;
 /// (<see cref="PicturesDirectoryFor"/>). In the database, the nightly backup would copy every picture every night and
 /// keep thirty copies on the box and a year's on the card, and a sum of the pictures' sizes would read every one of them
 /// (SQLite walks a BLOB's pages to reach a column after it), inside the write lock, for each note. As files they are
-/// held to their cap exactly, are not in the backups (a note is read within days; the words and the context are), and
-/// cost nothing to count.
+/// held to their cap exactly and cost nothing to count, and the backup keeps one copy of each on the card
+/// (<see cref="MirrorPictures"/>, #12) rather than one a night, and none off the site.
 /// </para>
 /// </summary>
 public sealed partial class ScoreStore
@@ -48,7 +48,7 @@ public sealed partial class ScoreStore
     public string PicturesDirectory => PicturesDirectoryFor(path);
 
     /// <summary>Where note <paramref name="id"/>'s picture is, whether or not it has one.</summary>
-    public string PicturePath(long id) => Path.Combine(PicturesDirectory, id.ToString(CultureInfo.InvariantCulture) + ".jpg");
+    public string PicturePath(long id) => Path.Combine(PicturesDirectory, PictureName(id));
 
     /// <param name="PlayerId">The player the note is linked to, only when its token matched one that exists.</param>
     /// <param name="ClaimedPlayerId">An id the service does not know yet, with <paramref name="ClaimedTokenHash"/>: what
@@ -160,6 +160,81 @@ public sealed partial class ScoreStore
         while (r.Read()) ids.Add(r.GetInt64(0));
         return ids;
     }
+
+    /// <summary>What <see cref="MirrorPictures"/> did, and what the folder holds after it.</summary>
+    public sealed record PictureMirror(int Copied, int Deleted, int Kept, int Missing, int Files, long Bytes);
+
+    /// <summary>
+    /// Brings <paramref name="folder"/> up to date with the pictures of the notes in the database: the backup's copy of
+    /// them on the card (#12), which <c>deploy/backup.sh</c> asks for every night. A picture the folder lacks, or holds at
+    /// another size than its note says, is copied under a temporary name and renamed; the copy of a picture whose note is
+    /// gone is deleted, so an <c>admin delete-note</c> and a player's removal reach the card too.
+    /// <para>
+    /// <b>The database decides what is deleted, never this store's folder.</b> A mirror of the folder (an
+    /// <c>rsync --delete</c>) empties the card the night after the disk dies: the database comes back from the card, the
+    /// service starts with no pictures, and the mirror follows the empty folder. Here a picture missing on the box is
+    /// counted and its copy kept, until the owner copies the pictures back.
+    /// </para>
+    /// </summary>
+    public PictureMirror MirrorPictures(SqliteConnection c, string folder)
+    {
+        Dictionary<long, long> pictures = new();
+        using (SqliteCommand cmd = Command(c, "SELECT id, picture_bytes FROM notes WHERE picture_bytes > 0"))
+        using (SqliteDataReader r = cmd.ExecuteReader())
+            while (r.Read()) pictures[r.GetInt64(0)] = r.GetInt64(1);
+
+        Directory.CreateDirectory(folder);
+        int copied = 0, deleted = 0, kept = 0, missing = 0;
+        foreach ((long id, long bytes) in pictures)
+        {
+            string copy = Path.Combine(folder, PictureName(id));
+            if (new FileInfo(copy) is { Exists: true } held && held.Length == bytes)
+            {
+                kept++;
+                continue;
+            }
+
+            FileInfo source = new(PicturePath(id));
+            if (!source.Exists || source.Length != bytes)
+            {
+                missing++;
+                continue;
+            }
+
+            string temp = copy + ".tmp";
+            File.Copy(source.FullName, temp, overwrite: true);
+            File.Move(temp, copy, overwrite: true);
+            copied++;
+        }
+
+        // Only what this method writes: a picture's copy whose note is gone, and a temporary copy a stopped run left
+        int files = 0;
+        long total = 0;
+        foreach (FileInfo file in new DirectoryInfo(folder).EnumerateFiles())
+        {
+            bool temporary = file.Name.EndsWith(".jpg.tmp", StringComparison.Ordinal);
+            long? id = PictureId(temporary ? file.Name[..^".tmp".Length] : file.Name);
+            if (id is long note && (temporary || !pictures.ContainsKey(note)))
+            {
+                file.Delete();
+                if (!temporary) deleted++;
+            }
+            else if (id != null)
+            {
+                files++;
+                total += file.Length;
+            }
+        }
+        return new PictureMirror(copied, deleted, kept, missing, files, total);
+    }
+
+    private static string PictureName(long id) => id.ToString(CultureInfo.InvariantCulture) + ".jpg";
+
+    /// <summary>The note a file name is the picture of, when it is exactly what <see cref="PictureName"/> writes.</summary>
+    private static long? PictureId(string name) =>
+        name.EndsWith(".jpg", StringComparison.Ordinal)
+        && long.TryParse(name[..^".jpg".Length], NumberStyles.None, CultureInfo.InvariantCulture, out long id)
+        && PictureName(id) == name ? id : null;
 
     private void DeletePicture(long id)
     {

@@ -91,6 +91,14 @@ sudo /opt/bs3d-api/current/deploy/backup-card.sh /dev/mmcblk0
 
 From then on every nightly copy also goes to `/mnt/bs3d-backup/bs3d-api/`. Copies there are kept a year; `BACKUP_OFFBOX_KEEP_DAYS` in `backup.env` changes that. With the card pulled, the run fails, rather than writing into the empty mount point on the NVMe and calling it a success.
 
+**The notes' pictures go to the card, and only there** (#12). They are files beside the database, not in it, so no copy of the database holds them. Each night, `admin mirror-pictures` brings `/mnt/bs3d-backup/bs3d-api/note-pictures/` up to date: one copy of each picture, not one a night.
+
+- **What it copies:** a picture the card lacks.
+- **What it deletes:** the copy of a picture whose note is gone from the database, after `admin delete-note` or a player's removal.
+- **What it never deletes:** a copy whose picture is merely missing on the Pi. So after the disk dies and the database comes back from the card, the next night does not empty the card's pictures.
+
+A copy that fails fails the card's record. An rsync destination over SSH gets no pictures, and neither does the copy off the site.
+
 **Each run's result is recorded** in `/var/lib/bs3d-api/backups/last-offbox`, which, unlike the journal, survives a reboot, and added as a line to `last-offbox.log` beside it (the last 1000 runs), from which the admin page's charts draw the copy's age day by day. The admin page's overview shows how old the newest copy off the box is. It warns when none is set up, when the last copy failed, or when the newest one is over two days old. `--remove` stops using the card; the copies on it stay.
 
 **Boot order:** the Pi 5 looks for a system on a card in the slot before the NVMe (`BOOT_ORDER=0xf461` here). This card holds none, so the Pi boots from the NVMe as before. Never leave a card with Raspberry Pi OS on it in the slot.
@@ -121,6 +129,8 @@ sudo systemctl stop bs3d-api
 sudo cp /var/lib/bs3d-api/backups/scores-<time>.db /var/lib/bs3d-api/scores.db   # or from /mnt/bs3d-backup/bs3d-api/
 sudo rm -f /var/lib/bs3d-api/scores.db-wal /var/lib/bs3d-api/scores.db-shm
 sudo chown bs3d-api:bs3d-api /var/lib/bs3d-api/scores.db
+sudo cp -a /mnt/bs3d-backup/bs3d-api/note-pictures /var/lib/bs3d-api/   # the notes' pictures, from the card only (#12)
+sudo chown -R bs3d-api:bs3d-api /var/lib/bs3d-api/note-pictures
 sudo systemctl start bs3d-api
 ```
 
@@ -145,9 +155,17 @@ admin export > export.jsonl
 admin notes                         # every note players sent from the game (#10), one JSON line each, oldest first
 admin notes --after 41 --out /tmp/notes   # the notes after id 41, their pictures written as <id>.jpg (a folder bs3d-api may write)
 admin delete-note <note id>         # a note and its picture, gone: anything that should not be on this disk goes at once
+admin mirror-pictures <folder>      # the pictures of the notes in the database copied there, gone notes' copies deleted (#12)
 ```
 
-A note's picture is a file in `/var/lib/bs3d-api/note-pictures/`, not in the database, so **no backup copies the pictures**: read the notes within days. At most 512 MB of them are kept (`Scores__NotesMaxStoredPictureBytes`), and at most 5,000 notes (`Scores__NotesMaxStored`); past either, delete old notes.
+A note's picture is a file in `/var/lib/bs3d-api/note-pictures/`, not in the database. **Only the card holds a copy of the pictures** (#12): the nightly backup mirrors them there, never off the site. A deleted note's picture leaves the card the next night.
+
+The limits:
+
+- At most 10 GiB of pictures are kept (`Scores__NotesMaxStoredPictureBytes`; the owner's figure, 2026-10-08, up from 512 MiB).
+- At most 5,000 notes are kept (`Scores__NotesMaxStored`). A picture is at most 400 kB, so 5,000 notes fill about 1.9 GiB, and the notes' cap binds first.
+
+Past either limit, delete old notes.
 
 **The admin page** (#5, read-only): an overview (players, clears, unfinished attempts and refusals per day, the database, the newest backup), a live view of the newest submissions and refusals, charts of how the players, the clears, the boards cleared, the time played and the refusals grow day by day, which game versions send the scores (the releases apart, the local `dev` builds together), how big the database's backups are, and how old the newest copy on the box, off it and off the site got each day, a missed night or a failed copy marked (14 days, 90 days or all, drawn on the server with no script), a funnel of how many players cleared each level in play order, every board ranked as the game sees it with its scores charted against the ceiling (an unfinished attempt marked as one, its hidden players apart, the list in play order and chapter by chapter once the game's ceiling tables name chapters), and every player with their clears, how many addresses they came from and whom they share one with (never the addresses themselves). It works on a phone's width too, light or dark after the system's setting. Times are in the Pi's own time zone (Prague, summer time included); days and months are UTC days and months, as the boards' months and the refusal counts are kept. On this Pi's own desktop, the **BS3D admin** icon runs `~/.local/bin/bs3d-admin-desktop` (the Pi's own, not in this repository): `bs3d-admin` in a terminal window, its link opened in the browser, and the page stopped when the window closes or with Ctrl+C. It is a separate process on the Pi's loopback, never behind the tunnel, and lives as long as the terminal that started it. Once, install its launcher: `bs3d-admin`, the runner it starts as `bs3d-api`, and the sudoers rule that lets the account running this start it without a password (`--remove` takes all three away):
 
@@ -203,4 +221,4 @@ What this Pi has beyond a fresh Raspberry Pi OS, each with its check:
 
 ## Developing
 
-See `CLAUDE.md`. What the service answers is contract v1 (BS3D#542), plus `GET /v1/boards` since #7, the summary of every board the game's High Scores screen asks for, since #8 unfinished attempts (0 stars), ranked below every clear and shown only for a player who has never cleared the board, and since #10 `POST /v1/notes`, a player's note from the game's Send a Note (BS3D#813) with its context and, unless they unticked it, a JPEG of the frame. `dotnet test BS3D.Api.slnx`, and for the deploy scripts `shellcheck deploy/*.sh tests/deploy/*.sh`, `sudo tests/deploy/tunnel-token.test.sh`, `sudo tests/deploy/install-admin.test.sh`, `sudo tests/deploy/update.test.sh`, `sudo tests/deploy/firewall.test.sh`, `sudo tests/deploy/backup.test.sh`, `sudo tests/deploy/backup-card.test.sh` and `sudo tests/deploy/backup-offsite.test.sh` (Linux; the backup's two need restic and sftp-server; all but the first also run without sudo, as `unshare -r`, and the firewall's as `unshare -rn`); a local run the game can submit to is `dotnet run --project src/BS3D.Api --urls http://localhost:5000` with `"server": "http://localhost:5000"` in the game's `Settings.json`.
+See `CLAUDE.md`. What the service answers is contract v1 (BS3D#542), plus `GET /v1/boards` since #7, the summary of every board the game's High Scores screen asks for, since #8 unfinished attempts (0 stars), ranked below every clear and shown only for a player who has never cleared the board, and since #10 `POST /v1/notes`, a player's note from the game's Send a Note (BS3D#813) with its context and, unless they unticked it, a JPEG of the frame, whose only backup is a copy on the card (#12). `dotnet test BS3D.Api.slnx`, and for the deploy scripts `shellcheck deploy/*.sh tests/deploy/*.sh`, `sudo tests/deploy/tunnel-token.test.sh`, `sudo tests/deploy/install-admin.test.sh`, `sudo tests/deploy/update.test.sh`, `sudo tests/deploy/firewall.test.sh`, `sudo tests/deploy/backup.test.sh`, `sudo tests/deploy/backup-card.test.sh` and `sudo tests/deploy/backup-offsite.test.sh` (Linux; the backup's two need restic and sftp-server; all but the first also run without sudo, as `unshare -r`, and the firewall's as `unshare -rn`); a local run the game can submit to is `dotnet run --project src/BS3D.Api --urls http://localhost:5000` with `"server": "http://localhost:5000"` in the game's `Settings.json`.

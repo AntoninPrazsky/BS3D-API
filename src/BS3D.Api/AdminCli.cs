@@ -13,7 +13,9 @@ namespace BS3D.Api;
 /// <para>
 /// The notes (#10): <c>admin notes [--after &lt;id&gt;] [--out &lt;folder&gt;]</c> prints one JSON line per note, oldest first
 /// and without the address hash, and with <c>--out</c> writes each note's picture there as <c>&lt;id&gt;.jpg</c>, which is how
-/// an agent reads them on the box; <c>admin delete-note &lt;id&gt;</c> removes a note and its picture. <b><c>count</c> does not
+/// an agent reads them on the box; <c>admin delete-note &lt;id&gt;</c> removes a note and its picture; and
+/// <c>admin mirror-pictures &lt;folder&gt;</c> brings the backup's copy of the pictures up to date (#12,
+/// <see cref="ScoreStore.MirrorPictures"/>), which <c>deploy/backup.sh</c> runs for the card. <b><c>count</c> does not
 /// count notes, and must not start to</b>: <c>update.sh</c> compares its line before and after an update as text, and the
 /// line before is printed by the release being replaced.
 /// </para>
@@ -67,6 +69,18 @@ public static class AdminCli
                 output.WriteLine(deleted ? $"deleted note {note} and its picture" : "no such note");
                 return deleted ? 0 : 1;
 
+            case ["mirror-pictures", var folder]:
+                string into = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+                if (into == Path.TrimEndingDirectorySeparator(Path.GetFullPath(store.PicturesDirectory)))
+                {
+                    output.WriteLine($"{into} is where the service keeps the pictures, not a copy of them");
+                    return 2;
+                }
+                ScoreStore.PictureMirror m = store.MirrorPictures(c, into);
+                output.WriteLine(FormattableString.Invariant(
+                    $"note pictures in {into}: {m.Copied} copied, {m.Deleted} deleted, {m.Kept} kept, {m.Missing} missing on the box; {m.Files} files, {m.Bytes / 1e6:0.0} MB"));
+                return 0;
+
             case ["export"]:
                 foreach (Dictionary<string, object?> row in store.Export(c))
                     output.WriteLine(JsonSerializer.Serialize(row));
@@ -79,7 +93,7 @@ public static class AdminCli
     }
 
     private const string Usage = "usage: admin hide-player <id> | show-player <id> | rename <id> <name> | export | backup <file> | count"
-        + " | notes [--after <id>] [--out <folder>] | delete-note <id>";
+        + " | notes [--after <id>] [--out <folder>] | delete-note <id> | mirror-pictures <folder>";
 
     // A note's text in a terminal: the letters as letters (the relaxed encoder), every control character escaped (JSON
     // always does), and every format and separator character escaped too (Terminal): a C0 or C1 control is a terminal
