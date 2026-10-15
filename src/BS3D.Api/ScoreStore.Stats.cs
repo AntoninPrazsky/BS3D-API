@@ -25,7 +25,6 @@ public sealed partial class ScoreStore
             abandons INTEGER NOT NULL DEFAULT 0,
             skips INTEGER NOT NULL DEFAULT 0,
             first_clears INTEGER NOT NULL DEFAULT 0,
-            starts_to_first_clear INTEGER NOT NULL DEFAULT 0,
             shots INTEGER NOT NULL DEFAULT 0,
             seconds REAL NOT NULL DEFAULT 0,
             PRIMARY KEY (level_file, level_hash, rules_version));
@@ -35,10 +34,13 @@ public sealed partial class ScoreStore
 
     /// <summary>
     /// Adds one batch's rows to the running totals, in one transaction with its id: false, and nothing added, when the id
-    /// was counted before (a resend out of the game's outbox whose first answer was lost).
+    /// was counted before (a resend out of the game's outbox whose first answer was lost). A batch of no rows adds nothing,
+    /// not even its id: a resend of it adds nothing either, so there is nothing for the id to guard.
     /// </summary>
     public bool AddStats(SqliteConnection c, Guid batchId, IReadOnlyList<StatsLevel> rows)
     {
+        if (rows.Count == 0) return true;
+
         Begin(c);
         try
         {
@@ -52,19 +54,18 @@ public sealed partial class ScoreStore
             foreach (StatsLevel r in rows)
                 Command(c, """
                     INSERT INTO play_stats (level_file, level_hash, rules_version, starts, retries, clears, lost_out_of_balls, lost_line,
-                        abandons, skips, first_clears, starts_to_first_clear, shots, seconds)
-                    VALUES ($f, $h, $r, $starts, $retries, $clears, $balls, $line, $abandons, $skips, $first, $tries, $shots, $seconds)
+                        abandons, skips, first_clears, shots, seconds)
+                    VALUES ($f, $h, $r, $starts, $retries, $clears, $balls, $line, $abandons, $skips, $first, $shots, $seconds)
                     ON CONFLICT (level_file, level_hash, rules_version) DO UPDATE SET
                         starts = starts + excluded.starts, retries = retries + excluded.retries, clears = clears + excluded.clears,
                         lost_out_of_balls = lost_out_of_balls + excluded.lost_out_of_balls, lost_line = lost_line + excluded.lost_line,
                         abandons = abandons + excluded.abandons, skips = skips + excluded.skips,
                         first_clears = first_clears + excluded.first_clears,
-                        starts_to_first_clear = starts_to_first_clear + excluded.starts_to_first_clear,
                         shots = shots + excluded.shots, seconds = seconds + excluded.seconds
                     """,
                     ("$f", r.File!), ("$h", r.Hash!), ("$r", r.Rules), ("$starts", r.Starts), ("$retries", r.Retries),
                     ("$clears", r.Clears), ("$balls", r.LostOutOfBalls), ("$line", r.LostLine), ("$abandons", r.Abandons),
-                    ("$skips", r.Skips), ("$first", r.FirstClears), ("$tries", r.StartsToFirstClear), ("$shots", r.Shots),
+                    ("$skips", r.Skips), ("$first", r.FirstClears), ("$shots", r.Shots),
                     ("$seconds", r.Seconds)).ExecuteNonQuery();
 
             Commit(c);
@@ -80,14 +81,14 @@ public sealed partial class ScoreStore
     /// <summary>One board's running totals, as <c>play_stats</c> holds them.</summary>
     public sealed record PlayStatsRow(
         BoardKey Board, long Starts, long Retries, long Clears, long LostOutOfBalls, long LostLine, long Abandons, long Skips,
-        long FirstClears, long StartsToFirstClear, long Shots, double Seconds);
+        long FirstClears, long Shots, double Seconds);
 
     /// <summary>Every board's totals, in no particular order; <see cref="PlayStatsReport"/> orders them.</summary>
     public static List<PlayStatsRow> PlayStats(SqliteConnection c)
     {
         using SqliteCommand cmd = Command(c, """
             SELECT level_file, level_hash, rules_version, starts, retries, clears, lost_out_of_balls, lost_line, abandons, skips,
-                   first_clears, starts_to_first_clear, shots, seconds
+                   first_clears, shots, seconds
             FROM play_stats
             """);
         using SqliteDataReader r = cmd.ExecuteReader();
@@ -96,7 +97,7 @@ public sealed partial class ScoreStore
         while (r.Read())
             rows.Add(new PlayStatsRow(new BoardKey(r.GetString(0), r.GetString(1), r.GetInt32(2)), r.GetInt64(3), r.GetInt64(4),
                 r.GetInt64(5), r.GetInt64(6), r.GetInt64(7), r.GetInt64(8), r.GetInt64(9), r.GetInt64(10), r.GetInt64(11),
-                r.GetInt64(12), r.GetDouble(13)));
+                r.GetDouble(12)));
         return rows;
     }
 }

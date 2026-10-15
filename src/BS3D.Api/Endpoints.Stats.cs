@@ -7,14 +7,21 @@ using Microsoft.Extensions.Options;
 namespace BS3D.Api;
 
 /// <summary>
-/// <c>POST /v1/stats</c> (BS3D#709, additive to contract v1): a batch of anonymous play counts — how often each board was
-/// started, retried, cleared, lost and by what, left and skipped, with its shots and seconds — added to the running totals
-/// of <c>play_stats</c> (<see cref="ScoreStore.AddStats"/>). The game sends one only for a player with online scores on,
-/// and <b>without a token or anything else that names the player</b>, so this takes none and stores nothing that could
-/// tie the counts to one: no address, no time, no version. Idempotent by the batch id; held, like a score, to a request
-/// size, a per-address rate and bounds on every count. A row on no board a ceiling table names is left out rather than
-/// refused, so one stray level does not cost a batch its other rows; with <see cref="ScoresOptions.RequireKnownBoard"/> off
-/// (a developer's machine) such a row counts when its file and hash are of a plain shape.
+/// <c>POST /v1/stats</c> (BS3D#709, additive to contract v1): a batch of play counts — how often each board was started,
+/// retried, cleared, lost and by what, left and skipped, with its shots and seconds — added to the running totals of
+/// <c>play_stats</c> (<see cref="ScoreStore.AddStats"/>). The game sends one only for a player with online scores on, on a
+/// schedule of its own apart from every request that names the player, and <b>without a token, an id, a name or a
+/// version</b>, so this takes none and stores no player, address, time or version with the counts. <b>Not even a refusal
+/// names the address</b>: a 429 here is logged as "a network", where a score's names the salted hash.
+/// <para>
+/// Anyone can send a batch, so one request is held to what one batch of real play can add: its own request size, a limit
+/// per network by the minute (an IPv6 address by its /64, as a note's), counts that are not negative and add up (retries
+/// no more than starts, endings and skips no more than the starts and the one attempt a batch can carry over), and a row
+/// past what one batch can hold (<see cref="Implausible"/>) left out. A row on no board a ceiling table names is left out
+/// too, rather than refused, so one stray level does not cost a batch its other rows; with
+/// <see cref="ScoresOptions.RequireKnownBoard"/> off (a developer's machine) such a row counts when its file and hash are
+/// of a plain shape. A batch of which nothing counts adds nothing, its id included.
+/// </para>
 /// </summary>
 public static partial class Endpoints
 {
@@ -35,15 +42,16 @@ public static partial class Endpoints
     }
 
     private static IResult PostStats(StatsBatch? body, HttpContext http, ScoreStore store, Ceilings ceilings,
-        IOptions<ScoresOptions> options, RateLimits limits, AddressHasher addresses, ILogger<ScoreStore> log)
+        IOptions<ScoresOptions> options, RateLimits limits, ILogger<ScoreStore> log)
     {
         ScoresOptions o = options.Value;
 
         if (body == null || body.BatchId == Guid.Empty || body.Levels == null || body.Levels.Count == 0)
             return Refuse(log, http, 400, Reasons.BadRequest, "missing batch id or levels");
 
-        if (!limits.TryTake("stats:" + AddressHasher.AddressOf(http), o.StatsPerMinutePerAddress, out TimeSpan wait))
-            return RateLimited(log, http, wait, "address " + addresses.Hash(http));
+        // By the network, as a note's limits count (an IPv6 host is handed a whole /64), and the refusal names no address
+        if (!limits.TryTake("stats:" + AddressHasher.NetworkOf(http), o.StatsPerMinutePerAddress, out TimeSpan wait))
+            return RateLimited(log, http, wait, "a network");
 
         if (body.Levels.Count > o.StatsMaxLevels)
             return Refuse(log, http, 422, Reasons.TooManyLevels, $"{body.Levels.Count} levels");
@@ -60,7 +68,15 @@ public static partial class Endpoints
             BoardKey board = new(row.File, row.Hash, row.Rules);
             if (!boards.Add(board)) return Refuse(log, http, 400, Reasons.BadRequest, $"{Printable(board.File)} r{board.Rules} twice");
 
-            if (BadCounts(row, o) is { } why) return Refuse(log, http, 422, Reasons.BadCounts, $"{Printable(board.File)} r{board.Rules}: {why}");
+            if (BadCounts(row) is { } why) return Refuse(log, http, 422, Reasons.BadCounts, $"{Printable(board.File)} r{board.Rules}: {why}");
+
+            // More than one batch of play can add: left out like a row on no board, so a forged batch cannot outweigh the
+            // real counts, and a real one carried through a long absence of the service loses that row and no other
+            if (Implausible(row, o))
+            {
+                ignored++;
+                continue;
+            }
 
             // A board a ceiling table names is the owner's own name, whatever its letters; any other is left out where
             // boards must be known, and where they need not be (a developer's machine) it is stored only in a plain
@@ -95,18 +111,33 @@ public static partial class Endpoints
         new(text.Select(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-' or ' ' ? c : '?').ToArray());
 
     /// <summary>
-    /// What makes a row's counts impossible, or null: a negative count, any count over its bound for one batch, retries or
-    /// first clears beyond what they are a part of, and seconds that are not a finite, non-negative number.
+    /// What makes a row's counts impossible from any game, or null: a negative count or time, retries beyond the starts,
+    /// first clears beyond the clears, and more endings (clears, losses, quits) or skips than the starts and the one
+    /// attempt a batch can carry over — one attempt is open at a time, so at most one started in the batch before.
     /// </summary>
-    private static string? BadCounts(StatsLevel r, ScoresOptions o)
+    private static string? BadCounts(StatsLevel r)
     {
-        int[] counts = [r.Starts, r.Retries, r.Clears, r.LostOutOfBalls, r.LostLine, r.Abandons, r.Skips, r.FirstClears, r.StartsToFirstClear];
+        int[] counts = [r.Starts, r.Retries, r.Clears, r.LostOutOfBalls, r.LostLine, r.Abandons, r.Skips, r.FirstClears];
         if (counts.Any(n => n < 0) || r.Shots < 0) return "a negative count";
-        if (counts.Any(n => n > o.StatsMaxCount) || r.Shots > o.StatsMaxShots) return "a count over its bound";
+        if (!double.IsFinite(r.Seconds) || r.Seconds < 0) return "negative seconds";
         if (r.Retries > r.Starts) return "more retries than starts";
         if (r.FirstClears > r.Clears) return "more first clears than clears";
-        if (r.FirstClears == 0 && r.StartsToFirstClear > 0) return "starts to a first clear without one";
-        if (!double.IsFinite(r.Seconds) || r.Seconds < 0 || r.Seconds > o.StatsMaxSeconds) return "seconds out of range";
+        if ((long)r.Clears + r.LostOutOfBalls + r.LostLine + r.Abandons > (long)r.Starts + 1) return "more endings than starts";
+        if (r.Skips > (long)r.Starts + 1) return "more skips than starts";
         return null;
     }
+
+    /// <summary>
+    /// Whether a row holds more than one batch of real play can: more seconds than <see cref="ScoresOptions.StatsMaxSeconds"/>,
+    /// more starts than <see cref="ScoresOptions.StatsMaxStarts"/> or than one a second of its play past the first few, or
+    /// more shots than <see cref="ScoresOptions.StatsMaxShotsPerAttempt"/> an attempt.
+    /// </summary>
+    private static bool Implausible(StatsLevel r, ScoresOptions o) =>
+        r.Seconds > o.StatsMaxSeconds
+        || r.Starts > o.StatsMaxStarts
+        || r.Starts > StatsFreeStarts + r.Seconds
+        || r.Shots > ((long)r.Starts + 1) * o.StatsMaxShotsPerAttempt;
+
+    /// <summary>Starts a row may hold beyond one a second of its play: a few instant Restarts are real.</summary>
+    private const int StatsFreeStarts = 5;
 }

@@ -27,7 +27,6 @@ public static class PlayStatsReport
         public double? LossRate => Ended > 0 ? Losses / (double)Ended : null;
         public double? RetryRate => Row.Starts > 0 ? Row.Retries / (double)Row.Starts : null;
         public double? SkipRate => Row.Starts > 0 ? Row.Skips / (double)Row.Starts : null;
-        public double? TriesToFirstClear => Row.FirstClears > 0 ? Row.StartsToFirstClear / (double)Row.FirstClears : null;
         public double? ShotsPerAttempt => Closed > 0 ? Row.Shots / (double)Closed : null;
         public double? SecondsPerAttempt => Closed > 0 ? Row.Seconds / Closed : null;
     }
@@ -75,7 +74,7 @@ public static class PlayStatsReport
     {
         yield return $"play counts by {SortOf(sort)}: {lines.Count} board(s), {lines.Sum(l => l.Row.Starts)} start(s)";
         yield return string.Create(CultureInfo.InvariantCulture,
-            $"{"level",-22} {"chapter",-16} {"board",-22} {"starts",7} {"lost (of ended)",-20} {"balls",6} {"line",5} {"retries (of starts)",-21} {"quits",6} {"skips",-18} {"tries/1st",9} {"shots/att",9} {"s/att",6}");
+            $"{"level",-22} {"chapter",-16} {"board",-22} {"starts",7} {"lost (of ended)",-20} {"balls",6} {"line",5} {"retries (of starts)",-21} {"quits",6} {"skips",-18} {"1st clears",10} {"shots/att",9} {"s/att",6}");
 
         foreach (Line l in lines)
         {
@@ -83,7 +82,7 @@ public static class PlayStatsReport
             string chapter = l.Chapter ?? "";
             string board = $"{l.Row.Board.File}#{l.Row.Board.Hash[..Math.Min(6, l.Row.Board.Hash.Length)]} r{l.Row.Board.Rules}";
             yield return string.Create(CultureInfo.InvariantCulture,
-                $"{Cut(level, 22),-22} {Cut(chapter, 16),-16} {Cut(board, 22),-22} {l.Row.Starts,7} {Share(l.Losses, l.Ended),-20} {l.Row.LostOutOfBalls,6} {l.Row.LostLine,5} {Share(l.Row.Retries, l.Row.Starts),-21} {l.Row.Abandons,6} {Share(l.Row.Skips, l.Row.Starts),-18} {Figure(l.TriesToFirstClear),9} {Figure(l.ShotsPerAttempt),9} {Figure(l.SecondsPerAttempt, "0"),6}");
+                $"{Cut(level, 22),-22} {Cut(chapter, 16),-16} {Cut(board, 22),-22} {l.Row.Starts,7} {Share(l.Losses, l.Ended),-20} {l.Row.LostOutOfBalls,6} {l.Row.LostLine,5} {Share(l.Row.Retries, l.Row.Starts),-21} {l.Row.Abandons,6} {Share(l.Row.Skips, l.Row.Starts),-18} {l.Row.FirstClears,10} {Figure(l.ShotsPerAttempt),9} {Figure(l.SecondsPerAttempt, "0"),6}");
         }
     }
 

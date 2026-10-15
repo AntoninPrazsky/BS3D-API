@@ -112,7 +112,7 @@ public sealed class ScoresOptions
     /// </summary>
     public long NotesMaxStoredPictureBytes { get; set; } = 10L << 30;
 
-    // Play counts (BS3D#709): anonymous, so anyone can post them; these bound what one request can add.
+    // Play counts (BS3D#709): sent with no token, so anyone can post them; these bound what one request can add.
 
     /// <summary>
     /// The largest request <c>POST /v1/stats</c> takes, above the 4 KB every other request is held to: a row is about 250
@@ -124,18 +124,18 @@ public sealed class ScoresOptions
     public int StatsMaxLevels { get; set; } = 200;
 
     /// <summary>
-    /// The most any one count of a row may be in one batch: the game sends a batch every ten minutes of play, and keeps
-    /// counting into one while the service is away, so this is weeks of one player on one level, and it bounds what a
-    /// forged batch can add to a level's counts.
+    /// The most seconds of play one row of a batch may carry; past it the row is left out. The game sends a batch at most
+    /// every ten minutes, some minutes after its last request that names the player, so a real row is rarely past half an
+    /// hour; this bounds what one forged request can add to a level's counts.
     /// </summary>
-    public int StatsMaxCount { get; set; } = 10_000;
+    public double StatsMaxSeconds { get; set; } = 1800;
 
-    /// <summary>The most shots a row may carry in one batch: <see cref="StatsMaxCount"/> attempts of a long level's budget.</summary>
-    public int StatsMaxShots { get; set; } = 1_000_000;
+    /// <summary>The most starts one row of a batch may carry, and never more than one a second of its play past the first few.</summary>
+    public int StatsMaxStarts { get; set; } = 100;
 
-    /// <summary>The most seconds a row may carry in one batch: a thousand hours.</summary>
-    public double StatsMaxSeconds { get; set; } = 3_600_000;
+    /// <summary>The most shots one row may carry per attempt it covers: above any level's budget.</summary>
+    public int StatsMaxShotsPerAttempt { get; set; } = 100;
 
-    /// <summary>Batches one address may send in a minute: a player sends one every ten minutes, a household a few.</summary>
+    /// <summary>Batches one network (an IPv4 address, an IPv6 /64) may send in a minute: a player sends one every ten minutes, a household a few.</summary>
     public int StatsPerMinutePerAddress { get; set; } = 10;
 }

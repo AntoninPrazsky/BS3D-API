@@ -88,18 +88,20 @@ public sealed record NoteRequest(
 public sealed record NoteAnswer(Guid NoteId, bool ScreenshotStored);
 
 /// <summary>
-/// The body of <c>POST /v1/stats</c> (BS3D#709): a batch of anonymous play counts, one row per board, from a game whose
+/// The body of <c>POST /v1/stats</c> (BS3D#709): a batch of play counts, one row per board, from a game whose
 /// player has online scores on. Additive to contract v1. <b>Nothing in it names a player</b>: no player id, no token, no
-/// nickname, no version and no clock, and it is sent without an <c>Authorization</c> header; <see cref="BatchId"/> is
-/// random per batch and only lets a resend count once. The game's copy is BS3D's <c>StatsBatchBody</c>.
+/// nickname, no version and no clock; the game sends it without an <c>Authorization</c> header, under the User-Agent
+/// <c>BS3D</c> with no version, on a connection of its own. <see cref="BatchId"/> is random per batch and only lets a
+/// resend count once. The game's copy is BS3D's <c>StatsBatchBody</c>.
 /// </summary>
 public sealed record StatsBatch(Guid BatchId, IReadOnlyList<StatsLevel?>? Levels);
 
 /// <summary>
 /// One board's counts in a <see cref="StatsBatch"/>, the change since the game's last batch: attempts started, the starts
 /// that retried a level the last attempt had not cleared, clears, losses by cause (out of balls, the cluster at the line),
-/// attempts left before their result page, skips, clears of a level the player had never cleared and the starts each took,
-/// and the shots and seconds over every attempt. BS3D's <c>LevelPlayCounts</c>, field for field.
+/// attempts left before their result page, skips, clears of a level the player had never cleared, and the shots and
+/// seconds over every attempt. BS3D's <c>LevelPlayCounts</c>, field for field but its <c>startsToFirstClear</c>, which the
+/// game keeps on the player's machine: it counts starts from before the player turned online scores on.
 /// </summary>
 public sealed record StatsLevel(
     string? File,
@@ -113,7 +115,6 @@ public sealed record StatsLevel(
     int Abandons,
     int Skips,
     int FirstClears,
-    int StartsToFirstClear,
     int Shots,
     double Seconds);
 

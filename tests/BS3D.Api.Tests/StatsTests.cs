@@ -11,9 +11,9 @@ namespace BS3D.Api.Tests;
 public sealed class StatsTests
 {
     public static StatsLevel Row(string file = Api.File, string hash = Api.Hash, int rules = Api.Rules, int starts = 3, int retries = 2,
-        int clears = 1, int balls = 1, int line = 0, int abandons = 1, int skips = 0, int firstClears = 1, int startsToFirstClear = 3,
-        int shots = 45, double seconds = 312.5) =>
-        new(file, hash, rules, starts, retries, clears, balls, line, abandons, skips, firstClears, startsToFirstClear, shots, seconds);
+        int clears = 1, int balls = 1, int line = 0, int abandons = 1, int skips = 0, int firstClears = 1, int shots = 45,
+        double seconds = 312.5) =>
+        new(file, hash, rules, starts, retries, clears, balls, line, abandons, skips, firstClears, shots, seconds);
 
     public static StatsBatch Batch(params StatsLevel?[] rows) => new(Guid.NewGuid(), rows);
 
@@ -41,8 +41,8 @@ public sealed class StatsTests
         Assert.Equal(new StatsAnswer(true, 0, 0, true), await again.Content.ReadFromJsonAsync<StatsAnswer>());
 
         ScoreStore.PlayStatsRow row = Totals(api)!;
-        Assert.Equal((3L, 2L, 1L, 1L, 0L, 1L, 0L, 1L, 3L, 45L), (row.Starts, row.Retries, row.Clears, row.LostOutOfBalls, row.LostLine,
-            row.Abandons, row.Skips, row.FirstClears, row.StartsToFirstClear, row.Shots));
+        Assert.Equal((3L, 2L, 1L, 1L, 0L, 1L, 0L, 1L, 45L), (row.Starts, row.Retries, row.Clears, row.LostOutOfBalls, row.LostLine,
+            row.Abandons, row.Skips, row.FirstClears, row.Shots));
         Assert.Equal(312.5, row.Seconds, 6);
     }
 
@@ -51,8 +51,8 @@ public sealed class StatsTests
     {
         using Api api = new(new() { ["Scores:RequireKnownBoard"] = "false" });
 
-        await Post(api, Batch(Row(), Row(file: "Two.json", starts: 1, retries: 0, clears: 0, firstClears: 0, startsToFirstClear: 0)));
-        await Post(api, Batch(Row(starts: 2, retries: 1, clears: 0, balls: 0, line: 2, abandons: 0, skips: 1, firstClears: 0, startsToFirstClear: 0,
+        await Post(api, Batch(Row(), Row(file: "Two.json", starts: 1, retries: 0, clears: 0, firstClears: 0)));
+        await Post(api, Batch(Row(starts: 2, retries: 1, clears: 0, balls: 0, line: 2, abandons: 0, skips: 1, firstClears: 0,
             shots: 20, seconds: 87.5)));
 
         ScoreStore.PlayStatsRow one = Totals(api)!;
@@ -127,13 +127,12 @@ public sealed class StatsTests
         { 422, Reasons.BadCounts, Batch(Row(starts: -1, retries: 0)) },
         { 422, Reasons.BadCounts, Batch(Row(abandons: -1)) },
         { 422, Reasons.BadCounts, Batch(Row(shots: -1)) },
-        { 422, Reasons.BadCounts, Batch(Row(starts: 10_001)) },
-        { 422, Reasons.BadCounts, Batch(Row(shots: 1_000_001)) },
         { 422, Reasons.BadCounts, Batch(Row(retries: 4)) },
         { 422, Reasons.BadCounts, Batch(Row(clears: 0)) },
-        { 422, Reasons.BadCounts, Batch(Row(firstClears: 0)) },
         { 422, Reasons.BadCounts, Batch(Row(seconds: -1)) },
-        { 422, Reasons.BadCounts, Batch(Row(seconds: 3_600_001)) },
+        //One attempt can carry over from the batch before, and no more: three starts end four times at most
+        { 422, Reasons.BadCounts, Batch(Row(clears: 2, balls: 2, line: 0, abandons: 1)) },
+        { 422, Reasons.BadCounts, Batch(Row(skips: 5)) },
     };
 
     [Theory]
@@ -149,6 +148,53 @@ public sealed class StatsTests
         Assert.Equal(reason, await Api.ReasonOf(response));
         using SqliteConnection c = api.Store.Open();
         Assert.Empty(ScoreStore.PlayStats(c));
+    }
+
+    public static TheoryData<string, StatsLevel> Implausible() => new()
+    {
+        { "more seconds than one batch of play", Row(seconds: 1801) },
+        { "more starts than one batch holds", Row(starts: 101, retries: 0, seconds: 1800) },
+        { "more starts than seconds of play", Row(starts: 20, retries: 0, clears: 1, balls: 0, abandons: 0, seconds: 14) },
+        { "more shots than the attempts could fire", Row(shots: 401) },
+    };
+
+    [Theory]
+    [MemberData(nameof(Implausible))]
+    public async Task A_row_past_one_batch_of_play_is_left_out_and_the_rest_counted(string why, StatsLevel row)
+    {
+        using Api api = new(new() { ["Scores:RequireKnownBoard"] = "false" });
+
+        HttpResponseMessage response = await Post(api, Batch(row, Row(file: "Two.json", starts: 1, retries: 0, clears: 0, firstClears: 0)));
+
+        Assert.True(new StatsAnswer(true, 1, 1, false) == await response.Content.ReadFromJsonAsync<StatsAnswer>(), why);
+        Assert.Null(Totals(api));
+        Assert.Equal(1L, Totals(api, "Two.json")!.Starts);
+    }
+
+    [Fact]
+    public async Task The_edge_of_one_batch_of_play_is_still_counted()
+    {
+        using Api api = new(new() { ["Scores:RequireKnownBoard"] = "false" });
+
+        HttpResponseMessage response = await Post(api, Batch(Row(starts: 100, retries: 0, clears: 0, balls: 0, abandons: 0, firstClears: 0,
+            shots: 10_100, seconds: 1800), Row(file: "Two.json", starts: 10, retries: 9, clears: 0, balls: 10, abandons: 0, firstClears: 0, seconds: 5)));
+
+        Assert.Equal(new StatsAnswer(true, 2, 0, false), await response.Content.ReadFromJsonAsync<StatsAnswer>());
+    }
+
+    [Fact]
+    public async Task A_batch_of_which_nothing_counts_adds_nothing_not_even_its_id()
+    {
+        using Api api = new();
+        StatsBatch batch = Batch(Row(hash: "ffffffffffffffff"), Row(seconds: 5000));
+
+        HttpResponseMessage response = await Post(api, batch);
+
+        Assert.Equal(new StatsAnswer(true, 0, 2, false), await response.Content.ReadFromJsonAsync<StatsAnswer>());
+        using SqliteConnection c = api.Store.Open();
+        using SqliteCommand count = c.CreateCommand();
+        count.CommandText = "SELECT COUNT(*) FROM stats_batches";
+        Assert.Equal(0L, (long)count.ExecuteScalar()!);
     }
 
     [Fact]
@@ -167,6 +213,25 @@ public sealed class StatsTests
         api.Clock.Advance(TimeSpan.FromMinutes(1));
         Assert.Equal(HttpStatusCode.Created, (await Post(api, Batch(Row()))).StatusCode);
         Assert.Equal(9L, Totals(api)!.Starts);
+
+        //The refusal names no address, not even by its hash: the line and the refusal log say "a network"
+        string hash = new AddressHasher("test-salt").Hash(new Microsoft.AspNetCore.Http.DefaultHttpContext());
+        string refused = Assert.Single(api.Log.Lines, line => line.Contains("/v1/stats", StringComparison.Ordinal));
+        Assert.Contains("(a network)", refused);
+        Assert.DoesNotContain(hash, refused);
+    }
+
+    [Fact]
+    public async Task An_ipv6_host_is_limited_by_its_64_and_another_64_is_not()
+    {
+        using Api api = new(new() { ["Scores:StatsPerMinutePerAddress"] = "1" });
+
+        api.ClientAddress = IPAddress.Parse("2001:db8:1:2::1");
+        Assert.Equal(HttpStatusCode.Created, (await Post(api, Batch(Row()))).StatusCode);
+        api.ClientAddress = IPAddress.Parse("2001:db8:1:2::ffff");
+        Assert.Equal(HttpStatusCode.TooManyRequests, (await Post(api, Batch(Row()))).StatusCode);
+        api.ClientAddress = IPAddress.Parse("2001:db8:1:3::1");
+        Assert.Equal(HttpStatusCode.Created, (await Post(api, Batch(Row()))).StatusCode);
     }
 
     [Fact]
@@ -178,7 +243,7 @@ public sealed class StatsTests
 
         using SqliteConnection c = api.Store.Open();
         Assert.Equal(["level_file", "level_hash", "rules_version", "starts", "retries", "clears", "lost_out_of_balls", "lost_line",
-            "abandons", "skips", "first_clears", "starts_to_first_clear", "shots", "seconds"], Columns(c, "play_stats"));
+            "abandons", "skips", "first_clears", "shots", "seconds"], Columns(c, "play_stats"));
         Assert.Equal(["batch_id"], Columns(c, "stats_batches"));
 
         //And nothing about an accepted batch is logged, as nothing about an accepted score is
@@ -201,8 +266,8 @@ public sealed class StatsTests
     {
         using Api api = new(new() { ["Scores:RequireKnownBoard"] = "false" });
         await Post(api, Batch(
-            Row(file: "Easy.json", starts: 10, retries: 0, clears: 9, balls: 1, line: 0, abandons: 0, skips: 0, firstClears: 1, startsToFirstClear: 1),
-            Row(file: "Hard.json", starts: 8, retries: 6, clears: 1, balls: 4, line: 2, abandons: 1, skips: 2, firstClears: 1, startsToFirstClear: 7)));
+            Row(file: "Easy.json", starts: 10, retries: 0, clears: 9, balls: 1, line: 0, abandons: 0, skips: 0, firstClears: 1),
+            Row(file: "Hard.json", starts: 8, retries: 6, clears: 1, balls: 4, line: 2, abandons: 1, skips: 2, firstClears: 1)));
 
         string Run(params string[] args)
         {
@@ -217,7 +282,6 @@ public sealed class StatsTests
         Assert.Contains("6 of 7 (86%)", byLoss[2]);       //lost of the attempts that ended
         Assert.Contains("6 of 8 (75%)", byLoss[2]);       //retries of the starts
         Assert.Contains("2 of 8 (25%)", byLoss[2]);       //skips of the starts
-        Assert.Contains("7.0", byLoss[2]);                //tries to the first clear
         Assert.StartsWith("Easy.json", byLoss[3]);
 
         string[] byRetries = Run("--sort", "retries").Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -234,11 +298,11 @@ public sealed class StatsTests
         await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
         {
             store.AddStats(c, Guid.NewGuid(), [
-                Row(starts: 10, retries: 0, clears: 9, balls: 1, line: 0, abandons: 0, skips: 0, firstClears: 1, startsToFirstClear: 1),
+                Row(starts: 10, retries: 0, clears: 9, balls: 1, line: 0, abandons: 0, skips: 0, firstClears: 1),
                 Row(file: "Two.json", hash: "fedcba9876543210", starts: 8, retries: 6, clears: 1, balls: 4, line: 2, abandons: 1, skips: 2,
-                    firstClears: 1, startsToFirstClear: 7),
+                    firstClears: 1),
                 Row(file: "Gone.json", hash: "0000000000000000", starts: 1, retries: 0, clears: 0, balls: 1, line: 0, abandons: 0, skips: 0,
-                    firstClears: 0, startsToFirstClear: 0)]);
+                    firstClears: 0)]);
         });
         page.WriteCeilingTable();
         await page.LogInAsync();
