@@ -216,10 +216,11 @@ public sealed class ProcessTests
     /// <summary>
     /// A note's request size (#10) where only a real Kestrel enforces one: a note with a picture far past the 4 KB every
     /// other request is held to is taken, a note past its own limit is a 413 before anything reads it, and a score
-    /// is still held to 4 KB. The test server the other tests use enforces no request size at all.
+    /// is still held to 4 KB. The play counts' batch (BS3D#709) has its own as well: one of 200 rows, far past 4 KB, is
+    /// taken, and one past its limit is a 413. The test server the other tests use enforces no request size at all.
     /// </summary>
     [Fact]
-    public async Task A_note_has_a_request_size_of_its_own_and_nothing_else_does()
+    public async Task A_note_and_a_stats_batch_have_request_sizes_of_their_own_and_nothing_else_does()
     {
         string folder = Path.Combine(Path.GetTempPath(), "bs3d-api-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(folder);
@@ -261,9 +262,16 @@ public sealed class ProcessTests
             HttpResponseMessage score = await client.PostAsync("/v1/scores",
                 new StringContent($$"""{"submissionId":"{{Guid.NewGuid()}}","name":"{{new string('a', 5000)}}"}""", Encoding.UTF8, "application/json"));
 
+            HttpResponseMessage stats = await client.PostAsync("/v1/stats", System.Net.Http.Json.JsonContent.Create(
+                StatsTests.Batch(Enumerable.Range(0, 200).Select(i => (StatsLevel?)StatsTests.Row(file: $"Level {i:000}.json")).ToArray())));
+            HttpResponseMessage statsTooLarge = await client.PostAsync("/v1/stats",
+                new StringContent($$"""{"batchId":"{{Guid.NewGuid()}}","levels":[{"file":"{{new string('a', 70_000)}}"}]}""", Encoding.UTF8, "application/json"));
+
             Assert.Equal(HttpStatusCode.Created, large.StatusCode);
             Assert.Equal(HttpStatusCode.RequestEntityTooLarge, tooLarge.StatusCode);
             Assert.Equal(HttpStatusCode.RequestEntityTooLarge, score.StatusCode);
+            Assert.Equal(HttpStatusCode.Created, stats.StatusCode);
+            Assert.Equal(HttpStatusCode.RequestEntityTooLarge, statsTooLarge.StatusCode);
         }
         finally
         {

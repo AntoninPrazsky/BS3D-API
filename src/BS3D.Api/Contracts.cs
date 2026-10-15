@@ -87,6 +87,43 @@ public sealed record NoteRequest(
 /// </summary>
 public sealed record NoteAnswer(Guid NoteId, bool ScreenshotStored);
 
+/// <summary>
+/// The body of <c>POST /v1/stats</c> (BS3D#709): a batch of play counts, one row per board, from a game whose
+/// player has online scores on. Additive to contract v1. <b>Nothing in it names a player</b>: no player id, no token, no
+/// nickname, no version and no clock; the game sends it without an <c>Authorization</c> header, under the User-Agent
+/// <c>BS3D</c> with no version, on a connection of its own. <see cref="BatchId"/> is random per batch and only lets a
+/// resend count once. The game's copy is BS3D's <c>StatsBatchBody</c>.
+/// </summary>
+public sealed record StatsBatch(Guid BatchId, IReadOnlyList<StatsLevel?>? Levels);
+
+/// <summary>
+/// One board's counts in a <see cref="StatsBatch"/>, the change since the game's last batch: attempts started, the starts
+/// that retried a level the last attempt had not cleared, clears, losses by cause (out of balls, the cluster at the line),
+/// attempts left before their result page, skips, clears of a level the player had never cleared, and the shots and
+/// seconds over every attempt. BS3D's <c>LevelPlayCounts</c>, field for field but its <c>startsToFirstClear</c>, which the
+/// game keeps on the player's machine: it counts starts from before the player turned online scores on.
+/// </summary>
+public sealed record StatsLevel(
+    string? File,
+    string? Hash,
+    int Rules,
+    int Starts,
+    int Retries,
+    int Clears,
+    int LostOutOfBalls,
+    int LostLine,
+    int Abandons,
+    int Skips,
+    int FirstClears,
+    int Shots,
+    double Seconds);
+
+/// <summary>
+/// What a batch is answered with: accepted, how many of its rows were counted and how many were on no board a ceiling table
+/// names (left out, not refused), and whether the batch id had been counted before (then nothing was added).
+/// </summary>
+public sealed record StatsAnswer(bool Accepted, int Counted, int Ignored, bool Duplicate);
+
 /// <summary>The answer of <c>GET /v1/health</c>.</summary>
 public sealed record HealthAnswer(string Status, int Contract, int Schema, int Boards);
 
@@ -114,4 +151,6 @@ public static class Reasons
     public const string BadPicture = "bad-picture";
     public const string PictureTooLarge = "picture-too-large";
     public const string NotesFull = "notes-full";
+    public const string BadCounts = "bad-counts";
+    public const string TooManyLevels = "too-many-levels";
 }

@@ -111,4 +111,31 @@ public sealed class ScoresOptions
     /// notes of <see cref="NoteMaxPictureBytes"/> each can fill, about 1.9 GiB, so it is the notes' cap that binds.
     /// </summary>
     public long NotesMaxStoredPictureBytes { get; set; } = 10L << 30;
+
+    // Play counts (BS3D#709): sent with no token, so anyone can post them; these bound what one request can add.
+
+    /// <summary>
+    /// The largest request <c>POST /v1/stats</c> takes, above the 4 KB every other request is held to: a row is about 250
+    /// bytes of JSON, so <see cref="StatsMaxLevels"/> rows and a margin.
+    /// </summary>
+    public long StatsMaxRequestBytes { get; set; } = 64 * 1024;
+
+    /// <summary>The most boards one batch may carry; the game sends no more (<c>OnlineScores.StatsMaxLevels</c>) and keeps the rest for its next.</summary>
+    public int StatsMaxLevels { get; set; } = 200;
+
+    /// <summary>
+    /// The most seconds of play one row of a batch may carry; past it the row is left out. The game sends a batch at most
+    /// every ten minutes, some minutes after its last request that names the player, so a real row is rarely past half an
+    /// hour; this bounds what one forged request can add to a level's counts.
+    /// </summary>
+    public double StatsMaxSeconds { get; set; } = 1800;
+
+    /// <summary>The most starts one row of a batch may carry, and never more than one a second of its play past the first few.</summary>
+    public int StatsMaxStarts { get; set; } = 100;
+
+    /// <summary>The most shots one row may carry per attempt it covers: above any level's budget.</summary>
+    public int StatsMaxShotsPerAttempt { get; set; } = 100;
+
+    /// <summary>Batches one network (an IPv4 address, an IPv6 /64) may send in a minute: a player sends one every ten minutes, a household a few.</summary>
+    public int StatsPerMinutePerAddress { get; set; } = 10;
 }

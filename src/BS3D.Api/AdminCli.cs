@@ -19,6 +19,11 @@ namespace BS3D.Api;
 /// count notes, and must not start to</b>: <c>update.sh</c> compares its line before and after an update as text, and the
 /// line before is printed by the release being replaced.
 /// </para>
+/// <para>
+/// The play counts (BS3D#709): <c>admin stats [--sort loss|retries|skips|order]</c> prints <see cref="PlayStatsReport"/>,
+/// one line per board with every rate beside its counts, by the loss rate unless another order is asked for. <c>count</c>
+/// does not count them either, for the same reason.
+/// </para>
 /// </summary>
 public static class AdminCli
 {
@@ -81,6 +86,23 @@ public static class AdminCli
                     $"note pictures in {into}: {m.Copied} copied, {m.Deleted} deleted, {m.Kept} kept, {m.Missing} missing on the box; {m.Files} files, {m.Bytes / 1e6:0.0} MB"));
                 return 0;
 
+            case ["stats", .. var rest]:
+                string? sort = rest switch
+                {
+                    [] => null,
+                    ["--sort", var key] when PlayStatsReport.Sorts.Contains(key) => key,
+                    _ => "?",
+                };
+                if (sort == "?")
+                {
+                    output.WriteLine(Usage);
+                    return 2;
+                }
+                Ceilings known = Ceilings.Load(options.CeilingsDirectory, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+                foreach (string line in PlayStatsReport.Text(PlayStatsReport.Build(ScoreStore.PlayStats(c), known, sort), PlayStatsReport.SortOf(sort)))
+                    output.WriteLine(line);
+                return 0;
+
             case ["export"]:
                 foreach (Dictionary<string, object?> row in store.Export(c))
                     output.WriteLine(JsonSerializer.Serialize(row));
@@ -93,7 +115,7 @@ public static class AdminCli
     }
 
     private const string Usage = "usage: admin hide-player <id> | show-player <id> | rename <id> <name> | export | backup <file> | count"
-        + " | notes [--after <id>] [--out <folder>] | delete-note <id> | mirror-pictures <folder>";
+        + " | notes [--after <id>] [--out <folder>] | delete-note <id> | mirror-pictures <folder> | stats [--sort loss|retries|skips|order]";
 
     // A note's text in a terminal: the letters as letters (the relaxed encoder), every control character escaped (JSON
     // always does), and every format and separator character escaped too (Terminal): a C0 or C1 control is a terminal
