@@ -4,8 +4,8 @@ using Microsoft.Data.Sqlite;
 namespace BS3D.Api;
 
 /// <summary>
-/// The service's whole state: one SQLite file, two tables (issue #1), the refusals' two (#5) and the notes (#10,
-/// <c>ScoreStore.Notes.cs</c>).
+/// The service's whole state: one SQLite file, two tables (issue #1), the refusals' two (#5), the notes (#10,
+/// <c>ScoreStore.Notes.cs</c>) and the play counts' two (BS3D#709, schema 4, <c>ScoreStore.Stats.cs</c>).
 /// <para>
 /// <b>Boards are views over an append-only log, not tables that get updated.</b> Every accepted submission is a row
 /// of <c>submissions</c> and stays one — a clear below the player's best is kept as the record of what was sent and
@@ -23,7 +23,7 @@ namespace BS3D.Api;
 /// </summary>
 public sealed partial class ScoreStore(string path)
 {
-    public const int SchemaVersion = 3;
+    public const int SchemaVersion = 4;
 
     private readonly string _connectionString = ConnectionStringFor(path);
 
@@ -98,6 +98,7 @@ public sealed partial class ScoreStore(string path)
                 detail TEXT NOT NULL);
             """);
         Execute(c, NotesSchema);
+        Execute(c, StatsSchema);
         Execute(c, $"PRAGMA user_version = {SchemaVersion};");
     }
 

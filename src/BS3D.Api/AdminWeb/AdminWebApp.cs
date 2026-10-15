@@ -145,6 +145,12 @@ public static class AdminWebApp
         // A note's picture, served only here: a JPEG the service checked the shape of, sent as one (nosniff is on every answer)
         app.MapGet("/note.jpg", (AdminData data, long? id) =>
             id is long n && data.ReadNotePicture(n) is { } picture ? Results.Bytes(picture, "image/jpeg") : Results.NotFound());
+        // The play counts (BS3D#709), in one of a fixed set of orders: the query string only ever picks one of them
+        app.MapGet("/stats", (AdminData data, string? sort) =>
+        {
+            string order = PlayStatsReport.SortOf(sort);
+            return Page(AdminPages.PlayStats(data.ReadPlayStats(data.LoadCeilings(), order), order));
+        });
         app.MapGet("/style.css", () => Results.Content(AdminPages.Css, "text/css; charset=utf-8"));
         return app;
     }
