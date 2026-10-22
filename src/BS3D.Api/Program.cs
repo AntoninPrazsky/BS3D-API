@@ -8,6 +8,8 @@ using Microsoft.Extensions.Options;
 
 // The admin page (issue #5) is its own process, built before anything of the public service and never migrating it
 if (args is ["admin", "web", ..]) return await AdminWebApp.RunAsync(args[2..]);
+// So is the status snapshot for the server's front panel (#13): read-only, never migrating, no listener
+if (args is ["admin", "status-feed", ..]) return await StatusFeed.RunAsync(args[2..]);
 
 bool admin = args.Length > 0 && args[0] == "admin";
 // The content root is the service's own folder, not the working directory (issue #3): systemd starts it in
@@ -18,6 +20,11 @@ WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationO
     Args = admin ? [] : args,
     ContentRootPath = AppContext.BaseDirectory,
 });
+
+// Under systemd the console logger writes each entry on one line, its level the journal's priority (#13):
+// journalctl -p warning finds the warnings, and the server's front panel reads the levels without matching text.
+// Anywhere else (a terminal, the tests, the admin CLI under sudo) nothing changes.
+builder.Host.UseSystemd();
 
 builder.Services.Configure<ScoresOptions>(builder.Configuration.GetSection(ScoresOptions.Section));
 builder.Services.AddSingleton(TimeProvider.System);

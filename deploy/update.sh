@@ -23,7 +23,7 @@ ROOT=${API_ROOT:-/opt/bs3d-api}
 DATABASE=${API_DATABASE:-/var/lib/bs3d-api/scores.db}
 UNIT_DIR=${UNIT_DIR:-/etc/systemd/system}
 HEALTH_SECONDS=${HEALTH_SECONDS:-30}
-UNITS=(bs3d-api.service bs3d-api-backup.service bs3d-api-backup.timer)
+UNITS=(bs3d-api.service bs3d-api-backup.service bs3d-api-backup.timer bs3d-api-status.service)
 version=${1:?usage: update.sh <vX.Y.Z | latest>}
 
 if [[ "$version" == latest ]]; then
@@ -83,6 +83,8 @@ if (( ${#changed[@]} > 0 )); then echo "installed ${changed[*]} from $version"; 
 
 ln -sfn "$ROOT/$version" "$ROOT/current"
 systemctl restart bs3d-api
+# The status feed (#13) runs the same binary: restarted when it runs, never started when the owner has not installed it
+systemctl try-restart bs3d-api-status.service
 
 healthy=false
 for _ in $(seq 1 "$HEALTH_SECONDS"); do
@@ -99,6 +101,7 @@ if ! $healthy; then
         done
         reload_units "${changed[@]}"
         systemctl restart bs3d-api
+        systemctl try-restart bs3d-api-status.service
         echo "rolled back to $(basename "$previous")" >&2
     fi
     exit 1

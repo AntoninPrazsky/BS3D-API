@@ -1,0 +1,38 @@
+# The status snapshot for the server's front panel (#13, BS3D-LCD#1): a small JSON file of aggregates, rewritten every
+# 15 s by an admin process of the service's binary (BS3D.Api admin status-feed), never by the service the tunnel
+# reaches. Installed and enabled by deploy/install-status.sh, which the owner runs; kept current by deploy/update.sh,
+# which restarts it with every release.
+#
+# It runs as bs3d-api, which owns the database, with bs3d-status as its group: the file is 0640, so the members of
+# bs3d-status (the panel's account) read it and no one else does. It opens the database read-only and never migrates
+# it; the database's folder stays writable only because a reader of a database in WAL mode keeps its place in the -shm
+# file beside it.
+[Unit]
+Description=BS3D score service status snapshot
+After=bs3d-api.service
+
+[Service]
+Type=simple
+User=bs3d-api
+Group=bs3d-status
+WorkingDirectory=/
+ExecStart=/opt/bs3d-api/current/BS3D.Api admin status-feed --every 15 --out /run/bs3d-status/status.json
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=Scores__Database=/var/lib/bs3d-api/scores.db
+Environment=Scores__CeilingsDirectory=/var/lib/bs3d-api/ceilings
+RuntimeDirectory=bs3d-status
+RuntimeDirectoryMode=0750
+Restart=always
+RestartSec=10
+
+# It reads the database and writes one file: no network, nothing else
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateNetwork=true
+ReadWritePaths=/var/lib/bs3d-api
+InaccessiblePaths=/dev/pts
+
+[Install]
+WantedBy=multi-user.target
