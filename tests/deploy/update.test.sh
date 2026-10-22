@@ -12,7 +12,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/releases" "$work/opt" "$work/units"
 umask 022
-units=(bs3d-api.service bs3d-api-backup.service bs3d-api-backup.timer)
+units=(bs3d-api.service bs3d-api-backup.service bs3d-api-backup.timer bs3d-api-status.service)
 
 cat > "$work/bin/curl" << 'EOF'
 #!/bin/sh
@@ -86,6 +86,8 @@ if [[ $status -eq 0 && "$(running)" == v1 ]]; then pass "installs a first releas
 if units_are A && [[ "$(modes)" == "644 root root" ]]; then pass "puts the release's units in place, root's, 0644"; else fail "the units: $(head -qn1 "$work/units/"*) $(modes)"; fi
 if [[ -n "$(at 'daemon-reload')" && "$(at 'daemon-reload')" -lt "$(at 'restart bs3d-api')" ]] && grep -qx "running v1 under # bs3d-api.service of A" "$work/calls"; then pass "reloads them before the restart, which meets the release's own unit"; else fail "reloads before the restart: $(cat "$work/calls")"; fi
 if [[ "$(called 'try-restart bs3d-api-backup.timer')" == 1 ]]; then pass "re-arms the backup timer it changed"; else fail "re-arms the backup timer it changed"; fi
+if [[ "$(called 'try-restart bs3d-api-status.service')" == 1 && "$(at 'try-restart bs3d-api-status.service')" -gt "$(at 'restart bs3d-api')" ]]; then
+    pass "restarts the status feed after the switch, only if it runs"; else fail "restarts the status feed: $(cat "$work/calls")"; fi
 
 run v3
 if [[ $status -eq 0 && "$(running)" == v3 ]] && units_are A && [[ "$(called daemon-reload)" == 0 ]]; then pass "leaves units that did not change alone"; else fail "leaves units that did not change alone ($status): $(cat "$work/calls")"; fi
@@ -95,6 +97,7 @@ if [[ $status -eq 1 && "$(running)" == v3 ]] && grep -q "rolled back to v3" "$wo
 if grep -qx "running v2 under # bs3d-api.service of B" "$work/calls"; then pass "the failed release ran under its own unit"; else fail "the failed release ran under: $(grep running "$work/calls")"; fi
 if units_are A && [[ "$(modes)" == "644 root root" ]] && grep -qx "running v3 under # bs3d-api.service of A" "$work/calls"; then pass "and the rollback puts the units it replaced back"; else fail "the units after the rollback: $(head -qn1 "$work/units/"*) $(modes)"; fi
 if [[ "$(called daemon-reload)" == 2 && "$(called 'try-restart bs3d-api-backup.timer')" == 2 ]]; then pass "reloading them both times"; else fail "daemon-reload $(called daemon-reload) times, the timer $(called 'try-restart bs3d-api-backup.timer')"; fi
+if [[ "$(called 'try-restart bs3d-api-status.service')" == 2 ]]; then pass "and the status feed runs the release rolled back to"; else fail "the status feed restarted $(called 'try-restart bs3d-api-status.service') times"; fi
 
 chmod 600 "$work/units/bs3d-api-backup.service"
 run v1
