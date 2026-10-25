@@ -35,6 +35,7 @@ public static partial class Endpoints
         app.MapDelete("/v1/players/{id:guid}", DeletePlayer);
         MapNoteEndpoint(app);
         MapStatsEndpoint(app);
+        MapBenchmarkEndpoint(app);
     }
 
     private static IResult PostScore(SubmissionRequest? body, HttpContext http, ScoreStore store, Ceilings ceilings,

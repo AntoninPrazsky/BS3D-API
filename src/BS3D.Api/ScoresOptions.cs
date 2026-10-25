@@ -138,4 +138,35 @@ public sealed class ScoresOptions
 
     /// <summary>Batches one network (an IPv4 address, an IPv6 /64) may send in a minute: a player sends one every ten minutes, a household a few.</summary>
     public int StatsPerMinutePerAddress { get; set; } = 10;
+
+    // Benchmarks (BS3D#988): sent with no token, so anyone can post one; these bound what they add to a disk at the
+    // owner's home.
+
+    /// <summary>
+    /// The largest result, in UTF-8 bytes as it is stored. The game's is about 3 KB: a machine report of twenty fields,
+    /// four scenes of sixteen figures each and the physics' fourteen.
+    /// </summary>
+    public int BenchmarkMaxResultBytes { get; set; } = 16 * 1024;
+
+    /// <summary>
+    /// The largest request <c>POST /v1/benchmarks</c> takes, above the 4 KB every other request is held to: the largest
+    /// result, its id and version, and a margin.
+    /// </summary>
+    public long BenchmarkMaxRequestBytes { get; set; } = 20 * 1024;
+
+    /// <summary>Results one network may send in a minute. A run takes over a minute; a game's outbox sends what it kept, oldest first.</summary>
+    public int BenchmarksPerMinutePerAddress { get; set; } = 3;
+
+    /// <summary>Results one network may send in 24 hours, a sliding window held in memory (a restart forgets it).</summary>
+    public int BenchmarksPerDayPerAddress { get; set; } = 20;
+
+    /// <summary>Results the service takes in one UTC day from everyone together, counted in the database.</summary>
+    public int BenchmarksPerDay { get; set; } = 1000;
+
+    /// <summary>
+    /// The results stored at most; past it one is refused (429, <c>benchmarks-full</c>) and stays in the game's outbox. It
+    /// bounds what the results add to the database the nightly backup copies: at most this many of
+    /// <see cref="BenchmarkMaxResultBytes"/>, about 320 MB, where a real one is a fifth of that.
+    /// </summary>
+    public int BenchmarksMaxStored { get; set; } = 20_000;
 }

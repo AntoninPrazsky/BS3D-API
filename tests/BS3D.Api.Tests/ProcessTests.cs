@@ -267,11 +267,18 @@ public sealed class ProcessTests
             HttpResponseMessage statsTooLarge = await client.PostAsync("/v1/stats",
                 new StringContent($$"""{"batchId":"{{Guid.NewGuid()}}","levels":[{"file":"{{new string('a', 70_000)}}"}]}""", Encoding.UTF8, "application/json"));
 
+            HttpResponseMessage benchmark = await client.PostAsync("/v1/benchmarks", System.Net.Http.Json.JsonContent.Create(
+                BenchmarkTests.Request(BenchmarkTests.ResultJson(extra: $$""","padding":"{{new string('p', 9000)}}" """))));
+            HttpResponseMessage benchmarkTooLarge = await client.PostAsync("/v1/benchmarks",
+                new StringContent($$$"""{"benchmarkId":"{{{Guid.NewGuid()}}}","gameVersion":"v0.5.0","result":{"x":"{{{new string('a', 30_000)}}}"}}""", Encoding.UTF8, "application/json"));
+
             Assert.Equal(HttpStatusCode.Created, large.StatusCode);
             Assert.Equal(HttpStatusCode.RequestEntityTooLarge, tooLarge.StatusCode);
             Assert.Equal(HttpStatusCode.RequestEntityTooLarge, score.StatusCode);
             Assert.Equal(HttpStatusCode.Created, stats.StatusCode);
             Assert.Equal(HttpStatusCode.RequestEntityTooLarge, statsTooLarge.StatusCode);
+            Assert.Equal(HttpStatusCode.Created, benchmark.StatusCode);
+            Assert.Equal(HttpStatusCode.RequestEntityTooLarge, benchmarkTooLarge.StatusCode);
         }
         finally
         {

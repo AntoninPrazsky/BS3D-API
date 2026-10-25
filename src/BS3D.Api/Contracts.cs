@@ -124,6 +124,19 @@ public sealed record StatsLevel(
 /// </summary>
 public sealed record StatsAnswer(bool Accepted, int Counted, int Ignored, bool Duplicate);
 
+/// <summary>
+/// The body of <c>POST /v1/benchmarks</c> (BS3D#988, additive to contract v1): one finished run of the game's benchmark,
+/// Extras &gt; Benchmark. <see cref="Result"/> is the object the game saves as <c>Benchmark.json</c>: the machine it ran on
+/// (<c>system</c>: build, platform, OS, CPU, memory, GPU, driver, back buffer, refresh, quality tier and the like), each
+/// scene's frame times (<c>segments</c>) and the physics' step times (<c>physics</c>). <b>Nothing in it names a player</b>:
+/// no player id, no token, no nickname; the game sends it without an <c>Authorization</c> header. <see cref="BenchmarkId"/>
+/// is random per result and only lets a resend be stored once. The game's copy is BS3D's <c>OnlineBenchmarks</c>.
+/// </summary>
+public sealed record BenchmarkRequest(Guid BenchmarkId, string? GameVersion, System.Text.Json.JsonElement? Result);
+
+/// <summary>What a result is answered with: its id, and whether that id had been stored before (then nothing was added).</summary>
+public sealed record BenchmarkAnswer(Guid BenchmarkId, bool Duplicate);
+
 /// <summary>The answer of <c>GET /v1/health</c>.</summary>
 public sealed record HealthAnswer(string Status, int Contract, int Schema, int Boards);
 
@@ -153,4 +166,7 @@ public static class Reasons
     public const string NotesFull = "notes-full";
     public const string BadCounts = "bad-counts";
     public const string TooManyLevels = "too-many-levels";
+    public const string BadResult = "bad-result";
+    public const string ResultTooLarge = "result-too-large";
+    public const string BenchmarksFull = "benchmarks-full";
 }
