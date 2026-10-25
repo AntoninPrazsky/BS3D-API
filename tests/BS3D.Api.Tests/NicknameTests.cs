@@ -31,4 +31,41 @@ public sealed class NicknameTests
     [Fact]
     public void A_letter_typed_as_base_and_combining_mark_is_one_letter() =>
         Assert.Equal("Café", Nicknames.Normalize("Café", Denied));
+
+    /// <summary>BS3D#1020: a denied word anywhere in the name, however it is cased, accented, split or spelled with digits.</summary>
+    [Theory]
+    [InlineData("KuloMrd")]
+    [InlineData("zmrd")]
+    [InlineData("MRDKA")]
+    [InlineData("k_u_r_v_a")]
+    [InlineData("kurv4")]
+    [InlineData("Kokot 7")]
+    [InlineData("Čůrák")]
+    [InlineData("Píčus")]
+    [InlineData("FuckYou")]
+    [InlineData("sh1thead")]
+    [InlineData("Hitler88")]
+    [InlineData("BigAss")]
+    [InlineData("pica123")]
+    [InlineData("Píča")]
+    [InlineData("kunda")]
+    [InlineData("Sex Machine")]
+    public void A_name_holding_a_denied_word_is_refused(string raw) => Assert.Null(Nicknames.Normalize(raw, Denied));
+
+    /// <summary>And not the ordinary names that hold a short one inside them, which are only refused as a whole part.</summary>
+    [Theory]
+    [InlineData("Picard")]
+    [InlineData("Bass")]
+    [InlineData("Kundera")]
+    [InlineData("Fickle")]
+    [InlineData("Analog")]
+    [InlineData("Sexton")]
+    [InlineData("Hancock")]
+    [InlineData("Peacock")]
+    [InlineData("Dickens")]
+    [InlineData("Swanky")]
+    [InlineData("Antonín Pražský")]
+    [InlineData("Titan")]
+    [InlineData("Cucumber")]
+    public void An_ordinary_name_that_holds_a_short_word_is_kept(string raw) => Assert.Equal(raw, Nicknames.Normalize(raw, Denied));
 }
