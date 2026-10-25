@@ -151,6 +151,9 @@ public static class AdminWebApp
             string order = PlayStatsReport.SortOf(sort);
             return Page(AdminPages.PlayStats(data.ReadPlayStats(data.LoadCeilings(), order), order));
         });
+        app.MapGet("/benchmarks", (AdminData data) => Page(AdminPages.Benchmarks(data.ReadBenchmarks(), options.TimeZone)));
+        app.MapGet("/benchmark", (AdminData data, long? id) =>
+            id is long n && data.ReadBenchmark(n) is { } result ? Page(AdminPages.Benchmark(result, options.TimeZone)) : Results.NotFound());
         app.MapGet("/style.css", () => Results.Content(AdminPages.Css, "text/css; charset=utf-8"));
         return app;
     }

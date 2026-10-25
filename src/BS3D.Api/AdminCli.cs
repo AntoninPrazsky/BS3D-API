@@ -24,6 +24,10 @@ namespace BS3D.Api;
 /// one line per board with every rate beside its counts, by the loss rate unless another order is asked for. <c>count</c>
 /// does not count them either, for the same reason.
 /// </para>
+/// <para>
+/// The benchmarks (BS3D#988): <c>admin benchmarks [--after &lt;id&gt;]</c> prints one JSON line per result, oldest first,
+/// the result as the game sent it, which is how an agent reads them on the box. <c>count</c> does not count them.
+/// </para>
 /// </summary>
 public static class AdminCli
 {
@@ -103,6 +107,29 @@ public static class AdminCli
                     output.WriteLine(line);
                 return 0;
 
+            case ["benchmarks", .. var rest]:
+                long? after = rest switch
+                {
+                    [] => 0,
+                    ["--after", var from] when long.TryParse(from, out long id) => id,
+                    _ => null,
+                };
+                if (after == null)
+                {
+                    output.WriteLine(Usage);
+                    return 2;
+                }
+                foreach (ScoreStore.StoredBenchmark b in store.Benchmarks(c, after.Value))
+                    output.WriteLine(Terminal(JsonSerializer.Serialize(new
+                    {
+                        b.Id,
+                        b.BenchmarkId,
+                        b.ReceivedAt,
+                        b.GameVersion,
+                        Result = ContextOf(b.Result),
+                    }, NoteJson)));
+                return 0;
+
             case ["export"]:
                 foreach (Dictionary<string, object?> row in store.Export(c))
                     output.WriteLine(JsonSerializer.Serialize(row));
@@ -115,7 +142,8 @@ public static class AdminCli
     }
 
     private const string Usage = "usage: admin hide-player <id> | show-player <id> | rename <id> <name> | export | backup <file> | count"
-        + " | notes [--after <id>] [--out <folder>] | delete-note <id> | mirror-pictures <folder> | stats [--sort loss|retries|skips|order]";
+        + " | notes [--after <id>] [--out <folder>] | delete-note <id> | mirror-pictures <folder> | stats [--sort loss|retries|skips|order]"
+        + " | benchmarks [--after <id>]";
 
     // A note's text in a terminal: the letters as letters (the relaxed encoder), every control character escaped (JSON
     // always does), and every format and separator character escaped too (Terminal): a C0 or C1 control is a terminal

@@ -35,6 +35,7 @@ public sealed class AdminSeparationTests
             "DELETE /v1/players/{id:guid}",
             "POST /v1/notes",
             "POST /v1/stats",
+            "POST /v1/benchmarks",
             "GET /v1/health",
             "GET /openapi/{documentName}.json",
         }, routes);
