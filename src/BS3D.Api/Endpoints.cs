@@ -92,7 +92,9 @@ public static partial class Endpoints
             if (player == null) store.CreatePlayer(c, body.PlayerId, Tokens.Hash(token), name, now);
             else if (player.Name != name) store.RenamePlayer(c, body.PlayerId, name);
 
-            (int? bestClear, int? bestUnfinished) = store.BestScores(c, board, body.PlayerId);
+            //A clear is ranked, and measured as a best, among what the build that sent it shows (#17)
+            ScoreStore.Builds builds = ScoreStore.SeenBy(body.GameVersion);
+            (int? bestClear, int? bestUnfinished) = store.BestScores(c, board, body.PlayerId, builds);
 
             store.Insert(c, new ScoreStore.NewSubmission(body.SubmissionId, body.PlayerId, board, body.Score, body.Stars,
                 body.ShotsUsed, body.DurationSeconds, body.GameVersion, addresses.Hash(http),
@@ -105,8 +107,8 @@ public static partial class Endpoints
                 PersonalBest: body.Stars > 0
                     ? bestClear == null || body.Score > bestClear
                     : bestClear == null && (bestUnfinished == null || body.Score > bestUnfinished),
-                Month: store.RankOf(c, board, ScoreStore.MonthOf(now), body.PlayerId).Rank,
-                AllTime: store.RankOf(c, board, null, body.PlayerId).Rank,
+                Month: store.RankOf(c, board, ScoreStore.MonthOf(now), body.PlayerId, builds).Rank,
+                AllTime: store.RankOf(c, board, null, body.PlayerId, builds).Rank,
                 Name: name);
 
             store.SetAnswer(c, body.SubmissionId, JsonSerializer.Serialize(answer, Json));
@@ -190,18 +192,19 @@ public static partial class Endpoints
         int take = Math.Clamp(limit ?? 20, 1, 100);
         int skip = Math.Max(offset ?? 0, 0);
         BoardKey board = new(file, hash, rules.Value);
+        ScoreStore.Builds builds = BuildsAskedBy(http);
 
         using SqliteConnection c = store.Open();
 
         BoardMe? me = null;
         if (player is Guid id)
         {
-            var (rank, score, stars) = store.RankOf(c, board, boardMonth, id);
+            var (rank, score, stars) = store.RankOf(c, board, boardMonth, id, builds);
             if (rank.Rank > 0) me = new BoardMe(rank.Rank, score, stars);
         }
 
-        return Results.Json(new BoardPage(allTime ? "all" : "month", boardMonth, store.Total(c, board, boardMonth),
-            store.Page(c, board, boardMonth, take, skip), me), Json);
+        return Results.Json(new BoardPage(allTime ? "all" : "month", boardMonth, store.Total(c, board, boardMonth, builds),
+            store.Page(c, board, boardMonth, take, skip, builds), me), Json);
     }
 
     /// <summary>
@@ -227,11 +230,27 @@ public static partial class Endpoints
         }
 
         using SqliteConnection c = store.Open();
-        List<BoardSummary> boards = store.Summary(c, boardMonth, player);
+        List<BoardSummary> boards = store.Summary(c, boardMonth, player, BuildsAskedBy(http));
 
         if (options.Value.RequireKnownBoard) boards.RemoveAll(b => !ceilings.TryGet(b.File, b.Hash, b.Rules, out _));
 
         return Results.Json(new BoardsSummary(allTime ? "all" : "month", boardMonth, boards), Json);
+    }
+
+    /// <summary>
+    /// The scores a board's GET shows (#17): every build's to a dev build of the game, and releases' only to anyone else -
+    /// a release, a browser, a script, no agent at all. The game names its build in the <c>User-Agent</c> of every
+    /// request, <c>BS3D/&lt;version&gt;</c> (its <c>OnlineScores.NewClient</c>, every release since v0.3.0), so the
+    /// releases already out see release scores with no update, and the view a stranger gets by default is a release's.
+    /// </summary>
+    private static ScoreStore.Builds BuildsAskedBy(HttpContext http)
+    {
+        const string product = "BS3D/";
+        string agent = http.Request.Headers.UserAgent.ToString();
+        if (!agent.StartsWith(product, StringComparison.Ordinal)) return ScoreStore.Builds.Releases;
+
+        string version = agent[product.Length..].Split(' ', 2)[0];
+        return GameVersionPattern().IsMatch(version) ? ScoreStore.SeenBy(version) : ScoreStore.Builds.Releases;
     }
 
     private static IResult PutPlayer(Guid id, NameBody? body, HttpContext http, ScoreStore store, IOptions<ScoresOptions> options,

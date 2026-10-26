@@ -27,19 +27,24 @@ public sealed partial class ScoreStore
     /// regenerated. The likely alternative is to count only the hash the newest ceiling table names for each file. The
     /// grouping is the one <c>PARTITION BY</c> in <c>best</c> below.
     /// </para>
-    /// <para>The status snapshot's Top players (#13) reads it; <c>GET /v1/ranking</c> (#11) is to answer with it.</para>
+    /// <para>
+    /// The status snapshot's Top players (#13) reads it over every build's scores; <c>GET /v1/ranking</c> (#11) is to
+    /// answer with it over the scores the asking build sees (<paramref name="builds"/>, #17): a release never ranks a
+    /// score a dev build sent.
+    /// </para>
     /// </summary>
-    public List<RankingRow> Ranking(SqliteConnection c, int rules, string? month, IEnumerable<BoardKey>? known, int limit, int offset = 0)
+    public List<RankingRow> Ranking(SqliteConnection c, int rules, string? month, IEnumerable<BoardKey>? known, int limit, int offset = 0,
+        Builds builds = Builds.All)
     {
         string? boards = known == null ? null
             : JsonSerializer.Serialize(known.Where(b => b.Rules == rules).Select(b => new[] { b.File, b.Hash }));
-        using SqliteCommand cmd = Command(c, """
+        using SqliteCommand cmd = Command(c, $"""
             WITH known AS (
                 SELECT json_extract(value, '$[0]') AS f, json_extract(value, '$[1]') AS h FROM json_each($known)),
             clears AS (
                 SELECT s.rowid AS seq, s.player_id, p.name, s.level_file, s.score, s.stars
                 FROM submissions s JOIN players p ON p.id = s.player_id
-                WHERE p.hidden = 0 AND s.stars > 0 AND s.rules_version = $rules
+                WHERE p.hidden = 0 AND s.stars > 0 AND s.rules_version = $rules AND {ShownTo}
                   AND ($month IS NULL OR s.month = $month)
                   -- IN, not EXISTS: SQLite builds the list's index once, where EXISTS read the JSON again for every row
                   -- (7 s rather than 0.6 s over 100 000 submissions on the Pi)
@@ -59,7 +64,7 @@ public sealed partial class ScoreStore
             ORDER BY rank
             LIMIT $limit OFFSET $offset
             """, ("$rules", rules), ("$month", (object?)month ?? DBNull.Value), ("$known", (object?)boards ?? DBNull.Value),
-            ("$limit", limit), ("$offset", offset));
+            ("$limit", limit), ("$offset", offset), ("$releases", ReleasesOnly(builds)));
 
         List<RankingRow> rows = new();
         using SqliteDataReader r = cmd.ExecuteReader();
