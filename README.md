@@ -151,6 +151,7 @@ admin count
 admin hide-player <player id>       # off every board and every count; nothing deleted
 admin show-player <player id>
 admin rename <player id> <nickname>
+admin delete-player <player id> '<nickname>'   # the player and every row that names them (#14), only with their nickname typed back
 admin export > export.jsonl
 admin notes                         # every note players sent from the game (#10), one JSON line each, oldest first
 admin notes --after 41 --out /tmp/notes   # the notes after id 41, their pictures written as <id>.jpg (a folder bs3d-api may write)
@@ -159,6 +160,8 @@ admin mirror-pictures <folder>      # the pictures of the notes in the database 
 admin stats                         # the play counts per level (BS3D#709), by loss rate; --sort retries|skips|order
 admin status-feed                   # the status snapshot for the server's front panel (#13), printed once
 ```
+
+`delete-player` takes what a player's own removal takes: the player, their submissions, their notes with the pictures, and the refusal log's lines that carry their id. It refuses, with nothing changed, unless the nickname is the player's as stored (the admin page's player page shows both). It never touches the play counts or the benchmarks, which name no player, nor the journal and the backups: the copies on the Pi go after 30 days, the card's after 365, the ones off the site after 12 months.
 
 A note's picture is a file in `/var/lib/bs3d-api/note-pictures/`, not in the database. **Only the card holds a copy of the pictures** (#12): the nightly backup mirrors them there, never off the site. A deleted note's picture leaves the card the next night.
 
