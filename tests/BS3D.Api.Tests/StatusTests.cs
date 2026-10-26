@@ -268,6 +268,8 @@ public sealed class StatusTests : IDisposable
                 read++;
             }
         });
+        // The writes start once the reader reads: v0.1.30's release run wrote all 300 before the reader's first read
+        Assert.True(SpinWait.SpinUntil(() => Volatile.Read(ref read) > 0, TimeSpan.FromSeconds(10)));
         for (int i = 0; i < 300; i++) StatusFeed.Write(file, i % 2 == 0 ? large : small);
         done.Cancel();
         reader.Wait();
