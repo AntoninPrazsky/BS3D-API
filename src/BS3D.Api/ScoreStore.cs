@@ -170,12 +170,13 @@ public sealed partial class ScoreStore(string path)
     /// The player's best clear and best unfinished attempt on a board over all time, each null when there is none: what
     /// a new submission's <c>personalBest</c> is measured against.
     /// </summary>
-    public (int? Clear, int? Unfinished) BestScores(SqliteConnection c, BoardKey board, Guid player)
+    public (int? Clear, int? Unfinished) BestScores(SqliteConnection c, BoardKey board, Guid player, Builds builds = Builds.All)
     {
-        using SqliteCommand cmd = Command(c, """
-            SELECT MAX(CASE WHEN stars > 0 THEN score END), MAX(CASE WHEN stars = 0 THEN score END) FROM submissions
-            WHERE level_file = $f AND level_hash = $h AND rules_version = $r AND player_id = $p
-            """, ("$f", board.File), ("$h", board.Hash), ("$r", board.Rules), ("$p", player.ToString()));
+        using SqliteCommand cmd = Command(c, $"""
+            SELECT MAX(CASE WHEN stars > 0 THEN score END), MAX(CASE WHEN stars = 0 THEN score END) FROM submissions s
+            WHERE level_file = $f AND level_hash = $h AND rules_version = $r AND player_id = $p AND {ShownTo}
+            """, ("$f", board.File), ("$h", board.Hash), ("$r", board.Rules), ("$p", player.ToString()),
+            ("$releases", ReleasesOnly(builds)));
         using SqliteDataReader r = cmd.ExecuteReader();
         r.Read();
         return (r.IsDBNull(0) ? null : r.GetInt32(0), r.IsDBNull(1) ? null : r.GetInt32(1));
@@ -200,8 +201,27 @@ public sealed partial class ScoreStore(string path)
         Command(c, "UPDATE submissions SET answer = $a WHERE id = $id", ("$id", id.ToString()), ("$a", answer)).ExecuteNonQuery();
 
     /// <summary>
+    /// Which builds' submissions a view ranks (#17, the owner's rule of 2026-10-26): a release of the game never shows a
+    /// score a dev build sent, and a dev build shows both. A release's <c>game_version</c> is a tag, <c>v…</c>, and a dev
+    /// build's is <c>dev</c> or <c>dev-&lt;sha&gt;</c>; the version check in <c>Endpoints</c> lets nothing else in, so
+    /// the first letter tells them apart. Every board query takes it, <see cref="Builds.All"/> unless the caller says:
+    /// the owner's views (the admin page, the front panel's status) show every score.
+    /// </summary>
+    public enum Builds { All, Releases }
+
+    /// <summary>The builds whose scores a game of <paramref name="gameVersion"/> sees (#17): a release only releases'.</summary>
+    public static Builds SeenBy(string gameVersion) => gameVersion.StartsWith('v') ? Builds.Releases : Builds.All;
+
+    /// <summary>The condition every board query puts on a submission <c>s</c>, with <c>$releases</c> from <see cref="ReleasesOnly"/>.</summary>
+    private const string ShownTo = "($releases = 0 OR substr(s.game_version, 1, 1) = 'v')";
+
+    private static int ReleasesOnly(Builds builds) => builds == Builds.Releases ? 1 : 0;
+
+    /// <summary>
     /// One row per visible player on a board — over one month, or over all time when <paramref name="month"/> is null
-    /// — ranked clears first, then by score, then by arrival. Every board query goes through this one statement.
+    /// — ranked clears first, then by score, then by arrival. Every board query goes through this one statement. Only
+    /// the rows <see cref="ShownTo"/> the asking build exist for it (#17): a player whose only clear came from a dev
+    /// build has not cleared the board as a release sees it.
     /// <para>
     /// A player's row is their best clear in the period. A player who has never cleared the board, in any month, shows
     /// their best unfinished attempt (0 stars, #8) instead; once they clear it, their unfinished attempts leave every
@@ -209,12 +229,12 @@ public sealed partial class ScoreStore(string path)
     /// (<c>cleared</c>, a window over the player's rows) before the period is chosen.
     /// </para>
     /// </summary>
-    private const string Ranked = """
+    private const string Ranked = $"""
         WITH board AS (
             SELECT s.player_id, p.name, s.score, s.stars, s.received_at, s.month, s.rowid AS seq,
                    MAX(s.stars > 0) OVER (PARTITION BY s.player_id) AS cleared
             FROM submissions s JOIN players p ON p.id = s.player_id
-            WHERE s.level_file = $f AND s.level_hash = $h AND s.rules_version = $r AND p.hidden = 0),
+            WHERE s.level_file = $f AND s.level_hash = $h AND s.rules_version = $r AND p.hidden = 0 AND {ShownTo}),
         best AS (
             SELECT player_id, name, score, stars, received_at, seq,
                    ROW_NUMBER() OVER (PARTITION BY player_id ORDER BY score DESC, seq ASC) AS pick
@@ -234,15 +254,15 @@ public sealed partial class ScoreStore(string path)
     /// best clear, or their best unfinished attempt while they have never cleared the board), clears first, then score,
     /// then arrival.
     /// </summary>
-    public List<BoardSummary> Summary(SqliteConnection c, string? month, Guid? player)
+    public List<BoardSummary> Summary(SqliteConnection c, string? month, Guid? player, Builds builds = Builds.All)
     {
-        using SqliteCommand cmd = Command(c, """
+        using SqliteCommand cmd = Command(c, $"""
             WITH board AS (
                 SELECT s.level_file AS f, s.level_hash AS h, s.rules_version AS r, s.player_id, p.name, s.score, s.stars,
                        s.month, s.rowid AS seq,
                        MAX(s.stars > 0) OVER (PARTITION BY s.level_file, s.level_hash, s.rules_version, s.player_id) AS cleared
                 FROM submissions s JOIN players p ON p.id = s.player_id
-                WHERE p.hidden = 0),
+                WHERE p.hidden = 0 AND {ShownTo}),
             best AS (
                 SELECT f, h, r, player_id, name, score, stars, seq,
                        ROW_NUMBER() OVER (PARTITION BY f, h, r, player_id ORDER BY score DESC, seq ASC) AS pick
@@ -257,7 +277,8 @@ public sealed partial class ScoreStore(string path)
             FROM ranked t LEFT JOIN ranked m ON m.f = t.f AND m.h = t.h AND m.r = t.r AND m.player_id = $p
             WHERE t.rank = 1
             ORDER BY t.f, t.h, t.r
-            """, ("$month", (object?)month ?? DBNull.Value), ("$p", (object?)player?.ToString() ?? DBNull.Value));
+            """, ("$month", (object?)month ?? DBNull.Value), ("$p", (object?)player?.ToString() ?? DBNull.Value),
+            ("$releases", ReleasesOnly(builds)));
 
         List<BoardSummary> boards = new();
         using SqliteDataReader r = cmd.ExecuteReader();
@@ -272,22 +293,23 @@ public sealed partial class ScoreStore(string path)
     }
 
     /// <summary>Where <paramref name="player"/> stands on a board; rank 0 when they are not on it.</summary>
-    public (BoardRank Rank, int Score, int Stars) RankOf(SqliteConnection c, BoardKey board, string? month, Guid player)
+    public (BoardRank Rank, int Score, int Stars) RankOf(SqliteConnection c, BoardKey board, string? month, Guid player,
+        Builds builds = Builds.All)
     {
-        using SqliteCommand cmd = BoardCommand(c, board, month, Ranked + " SELECT rank, total, score, stars FROM ranked WHERE player_id = $p");
+        using SqliteCommand cmd = BoardCommand(c, board, month, builds, Ranked + " SELECT rank, total, score, stars FROM ranked WHERE player_id = $p");
         cmd.Parameters.AddWithValue("$p", player.ToString());
         using SqliteDataReader r = cmd.ExecuteReader();
         if (r.Read()) return (new BoardRank(r.GetInt32(0), r.GetInt32(1)), r.GetInt32(2), r.GetInt32(3));
 
-        return (new BoardRank(0, Total(c, board, month)), 0, 0);
+        return (new BoardRank(0, Total(c, board, month, builds)), 0, 0);
     }
 
-    public int Total(SqliteConnection c, BoardKey board, string? month) =>
-        Convert.ToInt32(BoardCommand(c, board, month, Ranked + " SELECT COUNT(*) FROM ranked").ExecuteScalar());
+    public int Total(SqliteConnection c, BoardKey board, string? month, Builds builds = Builds.All) =>
+        Convert.ToInt32(BoardCommand(c, board, month, builds, Ranked + " SELECT COUNT(*) FROM ranked").ExecuteScalar());
 
-    public List<BoardEntry> Page(SqliteConnection c, BoardKey board, string? month, int limit, int offset)
+    public List<BoardEntry> Page(SqliteConnection c, BoardKey board, string? month, int limit, int offset, Builds builds = Builds.All)
     {
-        using SqliteCommand cmd = BoardCommand(c, board, month,
+        using SqliteCommand cmd = BoardCommand(c, board, month, builds,
             Ranked + " SELECT rank, name, score, stars, received_at FROM ranked ORDER BY rank LIMIT $limit OFFSET $offset");
         cmd.Parameters.AddWithValue("$limit", limit);
         cmd.Parameters.AddWithValue("$offset", offset);
@@ -370,8 +392,9 @@ public sealed partial class ScoreStore(string path)
     /// <summary>UTC, fixed width, so text order is time order.</summary>
     private static string Stamp(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss.fffffffZ", CultureInfo.InvariantCulture);
 
-    private static SqliteCommand BoardCommand(SqliteConnection c, BoardKey board, string? month, string sql) =>
-        Command(c, sql, ("$f", board.File), ("$h", board.Hash), ("$r", board.Rules), ("$month", (object?)month ?? DBNull.Value));
+    private static SqliteCommand BoardCommand(SqliteConnection c, BoardKey board, string? month, Builds builds, string sql) =>
+        Command(c, sql, ("$f", board.File), ("$h", board.Hash), ("$r", board.Rules), ("$month", (object?)month ?? DBNull.Value),
+            ("$releases", ReleasesOnly(builds)));
 
     private static SqliteCommand Command(SqliteConnection c, string sql, params (string Name, object Value)[] parameters)
     {
