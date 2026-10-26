@@ -123,11 +123,16 @@ public sealed partial class ScoreStore(string path)
     public int SetHidden(SqliteConnection c, Guid id, bool hidden) =>
         Command(c, "UPDATE players SET hidden = $h WHERE id = $id", ("$id", id.ToString()), ("$h", hidden ? 1 : 0)).ExecuteNonQuery();
 
+    /// <summary>What a player's removal took: their submissions, their notes (each with its picture) and refusal-log lines.</summary>
+    public sealed record Removal(int Submissions, int Notes, int Refusals);
+
     /// <summary>
-    /// The player and every submission of theirs (the foreign key cascades), and every note of theirs with its picture
-    /// (#10: linked, or sent before the service knew them with their id and token). Returns the submissions removed.
+    /// The player and every submission of theirs (the foreign key cascades), every note of theirs with its picture
+    /// (#10: linked, or sent before the service knew them with their id and token), and since #14 the refusal log's
+    /// lines that carry their id, in the detail or in the request's path. The player's own removal and the owner's
+    /// <c>admin delete-player</c> take the same rows.
     /// </summary>
-    public int DeletePlayer(SqliteConnection c, Guid id)
+    public Removal DeletePlayer(SqliteConnection c, Guid id)
     {
         Begin(c);
         try
@@ -135,10 +140,16 @@ public sealed partial class ScoreStore(string path)
             int removed = Convert.ToInt32(Command(c, "SELECT COUNT(*) FROM submissions WHERE player_id = $id", ("$id", id.ToString())).ExecuteScalar());
             List<long> notes = NotesOfPlayer(c, id);
             foreach (long note in notes) Command(c, "DELETE FROM notes WHERE id = $n", ("$n", note)).ExecuteNonQuery();
+            // Without hyphens and in lower case: a path holds the id as the request wrote it, and the route takes
+            // /v1/players/{id} in upper case and in every form a Guid parses from, 32 digits with no hyphen included
+            int refusals = Command(c, """
+                DELETE FROM refusal_log
+                WHERE instr(replace(lower(detail), '-', ''), $n) > 0 OR instr(replace(lower(path), '-', ''), $n) > 0
+                """, ("$n", id.ToString("N"))).ExecuteNonQuery();
             Command(c, "DELETE FROM players WHERE id = $id", ("$id", id.ToString())).ExecuteNonQuery();
             Commit(c);
             foreach (long note in notes) DeletePicture(note);
-            return removed;
+            return new Removal(removed, notes.Count, refusals);
         }
         catch
         {

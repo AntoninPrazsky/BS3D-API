@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace BS3D.Api.Tests;
 
@@ -59,6 +61,23 @@ public sealed class PlayerTests
     }
 
     [Fact]
+    public async Task A_removal_takes_the_refusal_log_lines_that_carry_the_players_id()
+    {
+        using Api api = new();
+        var player = Api.NewPlayer();
+        var other = Api.NewPlayer();
+        await api.Accepted(player, Api.Clear(player.Id, 100));
+        await api.Accepted(other, Api.Clear(other.Id, 150, name: "Other"));
+        await api.ClientFor(other.Token).DeleteAsync($"/v1/players/{player.Id}");
+        await api.ClientFor(player.Token).DeleteAsync($"/v1/players/{other.Id}");
+        Flush(api);
+
+        await api.ClientFor(player.Token).DeleteAsync($"/v1/players/{player.Id}");
+
+        Assert.Equal([$"/v1/players/{other.Id} {other.Id}"], RefusalLines(api));
+    }
+
+    [Fact]
     public async Task A_removal_needs_the_players_token()
     {
         using Api api = new();
@@ -104,6 +123,49 @@ public sealed class PlayerTests
     }
 
     [Fact]
+    public async Task The_admin_cli_deletes_a_player_and_every_row_that_names_them_only_with_their_nickname_typed_back()
+    {
+        using Api api = new();
+        var player = Api.NewPlayer();
+        var other = Api.NewPlayer();
+        await api.Accepted(player, Api.Clear(player.Id, 100, name: "Gone Soon"));
+        await api.Accepted(player, Api.Clear(player.Id, 200, name: "Gone Soon"));
+        await api.Accepted(other, Api.Clear(other.Id, 150, name: "Other"));
+        // The id in a refusal's detail and its path (a wrong token on a rename), in the detail alone (on a score), and in
+        // the path alone, written as the route also takes it (a bad name)
+        await api.ClientFor(other.Token).PutAsJsonAsync($"/v1/players/{player.Id}", new NameBody("Whoever"));
+        await api.Post((player.Id, other.Token), Api.Clear(player.Id, 300, name: "Gone Soon"));
+        await api.ClientFor(player.Token).PutAsJsonAsync($"/v1/players/{player.Id.ToString("N").ToUpperInvariant()}", new NameBody("x"));
+        await api.ClientFor(player.Token).PutAsJsonAsync($"/v1/players/{other.Id}", new NameBody("Whoever"));
+        await api.Post(other, Api.Clear(other.Id, Api.Ceiling + 1, name: "Other"));
+        Flush(api);
+        List<string> refusals = RefusalLines(api);
+        Assert.Equal(5, refusals.Count);
+
+        StringWriter refused = new();
+        Assert.Equal(1, AdminCli.Run(["delete-player", player.Id.ToString(), "Other"], api.Store, new ScoresOptions(), refused));
+        Assert.Equal(1, AdminCli.Run(["delete-player", player.Id.ToString(), "gone soon"], api.Store, new ScoresOptions(), refused));
+        Assert.Equal(2, AdminCli.Run(["delete-player", player.Id.ToString()], api.Store, new ScoresOptions(), refused));
+        Assert.Equal(1, AdminCli.Run(["delete-player", Guid.NewGuid().ToString(), "Gone Soon"], api.Store, new ScoresOptions(), refused));
+        Assert.Contains($"'Other' is not the nickname of {player.Id}: nothing deleted", refused.ToString());
+        Assert.Contains("no such player", refused.ToString());
+        Assert.Equal(3, api.Store.Export(api.Store.Open()).Count());
+        Assert.Equal(refusals, RefusalLines(api));
+
+        StringWriter output = new();
+        Assert.Equal(0, AdminCli.Run(["delete-player", player.Id.ToString(), "Gone Soon"], api.Store, new ScoresOptions(), output));
+
+        Assert.Equal($"deleted player {player.Id} 'Gone Soon': 2 submission(s), 0 note(s) with their pictures, 3 refusal-log line(s)",
+            output.ToString().Trim());
+        using (SqliteConnection c = api.Store.Open()) Assert.Null(api.Store.FindPlayer(c, player.Id));
+        Assert.Equal("Other", Assert.Single((await api.Board("all")).Entries).Name);
+        Assert.Single(api.Store.Export(api.Store.Open()));
+        Assert.Equal(refusals.Where(line => !line.Contains(player.Id.ToString()) && !line.Contains(player.Id.ToString("N").ToUpperInvariant())),
+            RefusalLines(api));
+        Assert.Equal(2, RefusalLines(api).Count);
+    }
+
+    [Fact]
     public async Task A_backup_taken_while_the_service_runs_serves_the_same_rows()
     {
         using Api api = new();
@@ -123,5 +185,19 @@ public sealed class PlayerTests
         using var c = restored.Open();
         Assert.Equal(250, restored.Page(c, new BoardKey(Api.File, Api.Hash, Api.Rules), null, 10, 0).Single().Score);
         restored.ClearPool();
+    }
+
+    private static void Flush(Api api) => api.Services.GetRequiredService<RefusalFlusher>().Flush();
+
+    /// <summary>The refusal log's lines, as "path detail", oldest first.</summary>
+    private static List<string> RefusalLines(Api api)
+    {
+        using SqliteConnection c = api.Store.Open();
+        using SqliteCommand cmd = c.CreateCommand();
+        cmd.CommandText = "SELECT path, detail FROM refusal_log ORDER BY id";
+        using SqliteDataReader r = cmd.ExecuteReader();
+        List<string> lines = new();
+        while (r.Read()) lines.Add($"{r.GetString(0)} {r.GetString(1)}");
+        return lines;
     }
 }

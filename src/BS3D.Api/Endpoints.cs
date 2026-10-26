@@ -240,8 +240,8 @@ public static partial class Endpoints
         using SqliteConnection c = store.Open();
         if (Authorize(store, c, id, http, log) is { } refused) return refused;
 
-        int removed = store.DeletePlayer(c, id);
-        log.LogInformation("Player {Player} removed at their request, with {Count} submission(s)", id, removed);
+        ScoreStore.Removal removed = store.DeletePlayer(c, id);
+        log.LogInformation("Player {Player} removed at their request, with {Count} submission(s)", id, removed.Submissions);
         return Results.NoContent();
     }
 

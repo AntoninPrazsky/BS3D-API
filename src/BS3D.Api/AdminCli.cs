@@ -11,6 +11,11 @@ namespace BS3D.Api;
 /// the live database, taken while the service runs — SQLite's own backup API, so the Pi needs no <c>sqlite3</c> package,
 /// issue #3) and <c>admin count</c> (players and submissions, what an update is checked against: it must lose no row).
 /// <para>
+/// <c>admin delete-player &lt;id&gt; &lt;nickname&gt;</c> (#14) deletes a player and every row that names them, the rows
+/// their own removal takes (<see cref="ScoreStore.DeletePlayer"/>), and only when the nickname typed back is theirs as
+/// stored: an id is 36 characters nobody reads, and a wrong one pasted must remove no one. Only here, on the box.
+/// </para>
+/// <para>
 /// The notes (#10): <c>admin notes [--after &lt;id&gt;] [--out &lt;folder&gt;]</c> prints one JSON line per note, oldest first
 /// and without the address hash, and with <c>--out</c> writes each note's picture there as <c>&lt;id&gt;.jpg</c>, which is how
 /// an agent reads them on the box; <c>admin delete-note &lt;id&gt;</c> removes a note and its picture; and
@@ -43,6 +48,9 @@ public static class AdminCli
 
             case ["show-player", var id] when Guid.TryParse(id, out Guid player):
                 return Report(output, store.SetHidden(c, player, false), $"{player} is on the boards again");
+
+            case ["delete-player", var id, var typed] when Guid.TryParse(id, out Guid player):
+                return DeletePlayer(store, c, player, typed, output);
 
             case ["rename", var id, var raw] when Guid.TryParse(id, out Guid player):
                 string? name = Nicknames.Normalize(raw, options.DeniedNames);
@@ -141,7 +149,8 @@ public static class AdminCli
         }
     }
 
-    private const string Usage = "usage: admin hide-player <id> | show-player <id> | rename <id> <name> | export | backup <file> | count"
+    private const string Usage = "usage: admin hide-player <id> | show-player <id> | rename <id> <name> | delete-player <id> <nickname>"
+        + " | export | backup <file> | count"
         + " | notes [--after <id>] [--out <folder>] | delete-note <id> | mirror-pictures <folder> | stats [--sort loss|retries|skips|order]"
         + " | benchmarks [--after <id>]";
 
@@ -240,6 +249,26 @@ public static class AdminCli
         using SqliteCommand cmd = c.CreateCommand();
         cmd.CommandText = sql;
         return (long)cmd.ExecuteScalar()!;
+    }
+
+    private static int DeletePlayer(ScoreStore store, SqliteConnection c, Guid id, string typed, TextWriter output)
+    {
+        ScoreStore.Player? player = store.FindPlayer(c, id);
+        if (player == null)
+        {
+            output.WriteLine("no such player");
+            return 1;
+        }
+        // The stored name is NFC (Nicknames.Normalize), and so is what the owner types back, whatever the terminal sent
+        if (!string.Equals(typed.Normalize(System.Text.NormalizationForm.FormC), player.Name, StringComparison.Ordinal))
+        {
+            output.WriteLine($"'{typed}' is not the nickname of {id}: nothing deleted");
+            return 1;
+        }
+
+        ScoreStore.Removal removed = store.DeletePlayer(c, id);
+        output.WriteLine($"deleted player {id} '{player.Name}': {removed.Submissions} submission(s), {removed.Notes} note(s) with their pictures, {removed.Refusals} refusal-log line(s)");
+        return 0;
     }
 
     private static int Report(TextWriter output, int changed, string what)
