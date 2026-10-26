@@ -11,8 +11,9 @@ namespace BS3D.Api.AdminWeb;
 /// every other view of the admin page; the service the tunnel reaches has no part of it.
 /// <para>
 /// <b>Never in it:</b> <c>token_hash</c>, <c>ip_hash</c> and user agents (never selected); hidden players and their
-/// submissions (in no count, no list, no ranking); a note's text or picture (only how many notes there are). The
-/// nicknames are the ones the public boards show (the owner, 2026-10-16).
+/// submissions (in no count, no list, no ranking); a note's text, picture or context (only how many notes there are,
+/// and since #15 when each of the newest came and who sent it). The nicknames are the ones the public boards show (the
+/// owner, 2026-10-16).
 /// </para>
 /// </summary>
 public sealed partial class AdminData
@@ -26,6 +27,15 @@ public sealed partial class AdminData
     /// <summary>The players of each ranking listed: the panel's rolling Top players (BS3D-LCD#5).</summary>
     public const int StatusRanked = 10;
 
+    /// <summary>The newest submissions listed, clears and unfinished attempts together: the panel's three pages of three (#15, BS3D-LCD#7).</summary>
+    public const int StatusRecent = 9;
+
+    /// <summary>The players who played last listed, as many as <see cref="StatusRecent"/> (#15, BS3D-LCD#7).</summary>
+    public const int StatusRecentPlayers = 9;
+
+    /// <summary>The newest notes listed with their senders: the panel's alarm for a new note (#15, BS3D-LCD#8).</summary>
+    public const int StatusRecentNotes = 10;
+
     public static readonly JsonSerializerOptions StatusJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -38,7 +48,8 @@ public sealed partial class AdminData
     public sealed record Status(
         int Format, DateTimeOffset WrittenAt, StatusService Service, StatusTotals Totals, StatusToday Today,
         IReadOnlyDictionary<string, int> RefusalsLastHour, int[] Hours, DateTimeOffset? LastSubmissionAt,
-        IReadOnlyList<StatusClear> Latest, StatusTop Top, StatusBackups Backups, StatusPlay? Play);
+        IReadOnlyList<StatusClear> Latest, StatusTop Top, StatusBackups Backups, StatusPlay? Play,
+        IReadOnlyList<StatusClear> Recent, IReadOnlyList<StatusRecentPlayer> RecentPlayers, IReadOnlyList<StatusNote> NotesRecent);
 
     /// <param name="Schema">The database's <c>user_version</c>; <paramref name="ExpectedSchema"/> is the one this release reads.</param>
     public sealed record StatusService(string Version, long Schema, int ExpectedSchema, long DbBytes);
@@ -55,8 +66,23 @@ public sealed partial class AdminData
         string Day, string Zone, int Clears, int Attempts, int NewPlayers, int ActivePlayers, double SecondsPlayed,
         IReadOnlyDictionary<string, int> Refusals);
 
+    /// <summary>A submission: in <c>latest</c> a clear, in <c>recent</c> a clear or an unfinished attempt (0 stars, #8).</summary>
     /// <param name="Level">The level's name from the ceiling tables, else its file.</param>
     public sealed record StatusClear(string Level, string Player, int Stars, int Score, DateTimeOffset At);
+
+    /// <summary>A player who played lately, with today's clears and attempts (the Pi's zone's day, as <see cref="StatusToday"/>).</summary>
+    /// <param name="FirstDay">Their first submission came today.</param>
+    public sealed record StatusRecentPlayer(string Player, DateTimeOffset LastAt, int Clears, int Attempts, bool FirstDay);
+
+    /// <summary>
+    /// One of the newest notes: when it came and who sent it, as the Notes tab names them, and nothing else of it. The
+    /// panel compares <paramref name="At"/> with the moment it last acknowledged, since <c>notes.id</c> has no
+    /// <c>AUTOINCREMENT</c> and the next note may take a deleted one's id.
+    /// </summary>
+    /// <param name="FromKind"><c>player</c> (linked to a visible player), <c>claimed</c> (a newcomer's name, unverified),
+    /// <c>hidden</c> (a hidden player's) or <c>anonymous</c>.</param>
+    /// <param name="From">The nickname for <c>player</c> and <c>claimed</c>, else null: a hidden player is never named.</param>
+    public sealed record StatusNote(DateTimeOffset At, string FromKind, string? From);
 
     /// <param name="Rules">The newest rules version the ceiling tables name: the one the game in the field plays.</param>
     /// <param name="Month">The UTC month, as the boards and the ranking count it.</param>
@@ -112,6 +138,47 @@ public sealed partial class AdminData
             while (r.Read())
                 latest.Add(new StatusClear(names.GetValueOrDefault(r.GetString(0)) ?? r.GetString(0), r.GetString(1), r.GetInt32(2), r.GetInt32(3), Time(r.GetString(4))));
 
+        List<StatusClear> recent = new();
+        using (SqliteCommand cmd = Command(c, $"""
+            SELECT s.level_file, p.name, s.stars, s.score, s.received_at FROM submissions s {Visible}
+            ORDER BY s.rowid DESC LIMIT $n
+            """, "$n", StatusRecent))
+        using (SqliteDataReader r = cmd.ExecuteReader())
+            while (r.Read())
+                recent.Add(new StatusClear(names.GetValueOrDefault(r.GetString(0)) ?? r.GetString(0), r.GetString(1), r.GetInt32(2), r.GetInt32(3), Time(r.GetString(4))));
+
+        List<StatusRecentPlayer> players = new();
+        using (SqliteCommand cmd = Command(c, $"""
+            SELECT p.name, MAX(s.received_at),
+                   SUM(s.stars > 0 AND s.received_at >= $since), SUM(s.stars = 0 AND s.received_at >= $since),
+                   MIN(s.received_at) >= $since
+            FROM submissions s {Visible}
+            GROUP BY s.player_id ORDER BY MAX(s.rowid) DESC LIMIT $n
+            """, "$since", since))
+        {
+            cmd.Parameters.AddWithValue("$n", StatusRecentPlayers);
+            using SqliteDataReader r = cmd.ExecuteReader();
+            while (r.Read())
+                players.Add(new StatusRecentPlayer(r.GetString(0), Time(r.GetString(1)), r.GetInt32(2), r.GetInt32(3), r.GetInt64(4) != 0));
+        }
+
+        // A newcomer's claim is not a link, but once their id is a hidden player's, the claimed name is that player's
+        List<StatusNote> notes = new();
+        if (schema >= 3)
+            using (SqliteCommand cmd = Command(c, """
+                SELECT n.received_at, p.name, p.hidden, n.claimed_name, cp.hidden FROM notes n
+                LEFT JOIN players p ON p.id = n.player_id
+                LEFT JOIN players cp ON cp.id = n.claimed_player_id
+                ORDER BY n.received_at DESC, n.id DESC LIMIT $n
+                """, "$n", StatusRecentNotes))
+            using (SqliteDataReader r = cmd.ExecuteReader())
+                while (r.Read())
+                    notes.Add(
+                        !r.IsDBNull(1) ? (r.GetInt64(2) != 0 ? new StatusNote(Time(r.GetString(0)), "hidden", null) : new StatusNote(Time(r.GetString(0)), "player", r.GetString(1)))
+                        : !r.IsDBNull(4) && r.GetInt64(4) != 0 ? new StatusNote(Time(r.GetString(0)), "hidden", null)
+                        : !r.IsDBNull(3) ? new StatusNote(Time(r.GetString(0)), "claimed", r.GetString(3))
+                        : new StatusNote(Time(r.GetString(0)), "anonymous", null));
+
         int rules = ceilings.All.Count > 0 ? ceilings.All.Max(b => b.RulesVersion) : 1;
         string month = ScoreStore.MonthOf(now);
         IEnumerable<BoardKey>? known = requireKnownBoard ? ceilings.All.Select(b => new BoardKey(b.File, b.Hash, b.RulesVersion)).ToList() : null;
@@ -161,7 +228,10 @@ public sealed partial class AdminData
                     Scalar(c, "SELECT COALESCE(SUM(starts), 0) FROM play_stats"),
                     Scalar(c, "SELECT COALESCE(SUM(clears), 0) FROM play_stats"),
                     Real(c, "SELECT COALESCE(SUM(seconds), 0) FROM play_stats"))
-                : null);
+                : null,
+            recent,
+            players,
+            notes);
     }
 
     private static StatusCopy? Copy(OffBox? record) =>

@@ -60,6 +60,11 @@ public sealed class StatusTests : IDisposable
     private void Clear(Guid player, int score, DateTimeOffset? at = null, BoardKey? board = null, int stars = 3) =>
         AdminPage.AddClear(_store, _c, at ?? Clock.GetUtcNow(), player, score, IpHash, board ?? One, stars);
 
+    /// <summary>A note linked to <paramref name="player"/>, or a newcomer's claiming <paramref name="claimed"/>'s id and a name.</summary>
+    private void Note(DateTimeOffset at, Guid? player = null, Guid? claimed = null, string? name = null) =>
+        _store.InsertNote(_c, new ScoreStore.NewNote(Guid.NewGuid(), at, player, claimed, claimed == null ? null : TokenHash, name,
+            "SECRET NOTE TEXT", "v0.5.0", """{"where":"menu"}""", IpHash, null, 0, 0, "{}"));
+
     /// <summary>A small server: two players, a hidden one, clears and an unfinished attempt, a refusal, a note, a backup record.</summary>
     private void Fill()
     {
@@ -79,6 +84,7 @@ public sealed class StatusTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_folder, "backups"));
         File.WriteAllText(Path.Combine(_folder, "backups", "last-offbox"),
             "attempt=2026-09-15T01:30:00Z\nresult=ok\ndetail=\nok=2026-09-15T01:30:00Z\ncopy=/mnt/x/scores.db\nevery=1\n");
+        Note(now.AddMinutes(-10), ann);
     }
 
     /// <summary>Every key path in the snapshot: an array's items as <c>[]</c>; the refusal counts, keyed by reason, as one leaf.</summary>
@@ -120,6 +126,10 @@ public sealed class StatusTests : IDisposable
             "backups", "backups.offbox", "backups.offbox.result", "backups.offbox.attempt", "backups.offbox.ok", "backups.offbox.every",
             "backups.offsite",
             "play", "play.starts", "play.clears", "play.seconds",
+            "recent", "recent[].level", "recent[].player", "recent[].stars", "recent[].score", "recent[].at",
+            "recent_players", "recent_players[].player", "recent_players[].last_at", "recent_players[].clears",
+            "recent_players[].attempts", "recent_players[].first_day",
+            "notes_recent", "notes_recent[].at", "notes_recent[].from_kind", "notes_recent[].from",
         }, Keys(document.RootElement));
     }
 
@@ -141,6 +151,80 @@ public sealed class StatusTests : IDisposable
         Assert.Equal(["One", "Two", "One"], status.Latest.Select(c => c.Level));
         Assert.Equal(["Bob", "Ann", "Ann"], status.Latest.Select(c => c.Player));
         Assert.Equal(2, status.Today.ActivePlayers);
+    }
+
+    [Fact]
+    public void Recent_lists_clears_and_unfinished_attempts_newest_first_and_no_hidden_player()
+    {
+        Fill();
+
+        AdminData.Status status = Read();
+
+        // In arrival order: Bob's unfinished attempt came last of the visible rows, Hilda's clear after it is hidden
+        Assert.Equal([("Two", "Bob", 0, 100), ("One", "Bob", 3, 250), ("Two", "Ann", 3, 200), ("One", "Ann", 3, 300)],
+            status.Recent.Select(r => (r.Level, r.Player, r.Stars, r.Score)));
+
+        Guid carl = Player("Carl");
+        for (int i = 0; i < 12; i++) Clear(carl, i, stars: i % 3);
+        Assert.Equal(AdminData.StatusRecent, Read().Recent.Count);
+        Assert.Equal(11, Read().Recent[0].Score);
+    }
+
+    [Fact]
+    public void Recent_players_are_one_row_each_by_their_last_submission_with_the_Prague_day_s_counts()
+    {
+        DateTimeOffset now = Clock.GetUtcNow();    // 14:30 in Prague; its day began at 22:00 UTC on the 14th
+        Guid ann = Player("Ann", now.AddDays(-2));
+        Clear(ann, 100, now.AddDays(-2));
+        Guid carl = Player("Carl", now.AddDays(-1));
+        Clear(carl, 100, now.AddDays(-1));
+        Guid bob = Player("Bob", new DateTimeOffset(2026, 9, 14, 22, 30, 0, TimeSpan.Zero));
+        Clear(bob, 100, new DateTimeOffset(2026, 9, 14, 22, 30, 0, TimeSpan.Zero), Two);    // 00:30 on the 15th in Prague
+        Clear(bob, 100, now.AddMinutes(-30));
+        Clear(ann, 200, now.AddMinutes(-10), Two);
+        Clear(ann, 50, now.AddMinutes(-5), stars: 0);
+        Guid hid = Player("Hidden Hilda");
+        Clear(hid, 999, now.AddMinutes(-1));
+        _store.SetHidden(_c, hid, true);
+
+        IReadOnlyList<AdminData.StatusRecentPlayer> players = Read().RecentPlayers;
+
+        Assert.Equal([("Ann", 1, 1, false), ("Bob", 2, 0, true), ("Carl", 0, 0, false)],
+            players.Select(p => (p.Player, p.Clears, p.Attempts, p.FirstDay)));
+        Assert.Equal([now.AddMinutes(-5), now.AddMinutes(-30), now.AddDays(-1)], players.Select(p => p.LastAt));
+
+        for (int i = 0; i < 12; i++) Clear(Player($"P{i:00}"), i);
+        Assert.Equal(AdminData.StatusRecentPlayers, Read().RecentPlayers.Count);
+        Assert.Equal("P11", Read().RecentPlayers[0].Player);
+    }
+
+    [Fact]
+    public void The_newest_notes_name_their_senders_never_a_hidden_one_and_nothing_else_of_them()
+    {
+        DateTimeOffset now = Clock.GetUtcNow();
+        Guid ann = Player("Ann");
+        Guid hid = Player("Hidden Hilda");
+        _store.SetHidden(_c, hid, true);
+        Note(now.AddMinutes(-50));
+        Note(now.AddMinutes(-40), claimed: Guid.NewGuid(), name: "Newbie");
+        Note(now.AddMinutes(-30), ann);
+        Note(now.AddMinutes(-20), hid);
+        Note(now.AddMinutes(-10), claimed: hid, name: "Sneaky");    // a newcomer's claim, the id now a hidden player's
+        Note(now.AddMinutes(-60), ann);                               // arrived last, sent earliest: listed by its time
+
+        AdminData.Status status = Read();
+        string json = Json();
+
+        Assert.Equal([("hidden", null), ("hidden", null), ("player", "Ann"), ("claimed", "Newbie"), ("anonymous", null), ("player", "Ann")],
+            status.NotesRecent.Select(n => (n.FromKind, n.From)));
+        Assert.Equal([-10, -20, -30, -40, -50, -60], status.NotesRecent.Select(n => (int)(n.At - now).TotalMinutes));
+        Assert.DoesNotContain("Hilda", json);
+        Assert.DoesNotContain("Sneaky", json);
+        Assert.DoesNotContain("SECRET NOTE TEXT", json);
+        Assert.DoesNotContain("menu", json);
+
+        for (int i = 0; i < 12; i++) Note(now.AddSeconds(i));
+        Assert.Equal(AdminData.StatusRecentNotes, Read().NotesRecent.Count);
     }
 
     [Fact]
