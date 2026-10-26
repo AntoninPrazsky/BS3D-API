@@ -95,3 +95,49 @@ public sealed class RateLimits(TimeProvider clock)
         }
     }
 }
+
+/// <summary>
+/// The seconds of play each player may still claim (#16), in memory like <see cref="RateLimits"/>: a restart refills
+/// every budget, which costs one allowance at most. The game's clock for a level runs on the frame's real seconds while
+/// it is played, so a player who plays online never claims more than has passed between their submissions; the
+/// allowance is for the game's outbox, which sends the clears played while the service was away all at once. A budget
+/// refills at one second a second up to the allowance, and a new player starts with it full.
+/// </summary>
+public sealed class PlayTimeBudgets(TimeProvider clock)
+{
+    private sealed class Budget(double seconds, DateTimeOffset at)
+    {
+        public double Seconds = seconds;
+        public DateTimeOffset At = at;
+    }
+
+    private readonly ConcurrentDictionary<Guid, Budget> _budgets = new();
+
+    /// <summary>
+    /// Spends <paramref name="seconds"/> of <paramref name="player"/>'s budget; false with the wait until it covers
+    /// them. A submission longer than the whole allowance is let through on a full budget and leaves it in debt, or a
+    /// long level would wait at the head of the game's outbox for ever, and every clear queued behind it with it.
+    /// </summary>
+    public bool TrySpend(Guid player, double seconds, double allowance, out TimeSpan retryAfter)
+    {
+        DateTimeOffset now = clock.GetUtcNow();
+        Budget budget = _budgets.GetOrAdd(player, _ => new Budget(allowance, now));
+
+        lock (budget)
+        {
+            budget.Seconds = Math.Min(allowance, budget.Seconds + Math.Max((now - budget.At).TotalSeconds, 0));
+            budget.At = now;
+
+            double needed = Math.Min(seconds, allowance);
+            if (budget.Seconds < needed)
+            {
+                retryAfter = TimeSpan.FromSeconds(needed - budget.Seconds);
+                return false;
+            }
+
+            budget.Seconds -= seconds;
+            retryAfter = TimeSpan.Zero;
+            return true;
+        }
+    }
+}

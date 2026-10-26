@@ -45,6 +45,14 @@ public sealed class ScoresOptions
     /// </summary>
     public double MinSecondsPerShot { get; set; } = 0.25;
 
+    /// <summary>
+    /// The seconds of play a player may claim beyond what has passed (#16, <see cref="PlayTimeBudgets"/>): what the game's
+    /// outbox may send at once after the service was away. Past it a submission is answered 429 and stays in the outbox.
+    /// Ten minutes, against which none of the 129 real submissions on the box (2026-10-26) would have waited, and 123 of
+    /// the 150 a script sent that evening would have.
+    /// </summary>
+    public double PlayTimeAllowanceSeconds { get; set; } = 600;
+
     /// <summary>Nicknames refused outright, compared case-insensitively against the normalized name.</summary>
     public List<string> DeniedNames { get; set; } = new() { "admin", "administrator", "moderator", "system", "bs3d" };
 
