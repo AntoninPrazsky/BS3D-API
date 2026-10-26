@@ -154,6 +154,7 @@ public static class Reasons
     public const string BadShots = "bad-shots";
     public const string BadDuration = "bad-duration";
     public const string RateLimited = "rate-limited";
+    public const string PlayTime = "play-time";
     public const string UnknownPlayer = "unknown-player";
     public const string SubmissionOfAnotherPlayer = "submission-of-another-player";
     public const string EmptyNote = "empty-note";

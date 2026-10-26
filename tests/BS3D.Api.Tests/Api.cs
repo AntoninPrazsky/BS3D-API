@@ -56,9 +56,16 @@ public sealed class Api : WebApplicationFactory<Program>
             ["Scores:AddressSalt"] = "test-salt",
             ["Scores:SubmissionsPerMinutePerAddress"] = "1000",
             ["Scores:SubmissionsPerMinutePerPlayer"] = "1000",
+            ["Scores:PlayTimeAllowanceSeconds"] = "1000000",
         };
         foreach (var (key, value) in settings ?? new()) _settings[key] = value;
     }
+
+    /// <summary>
+    /// Another ceiling table beside the fixture's, as another release of the game carries one. Before the first request:
+    /// the service reads the tables once, as it starts.
+    /// </summary>
+    public void AddTable(string name, string json) => System.IO.File.WriteAllText(Path.Combine(_folder, "ceilings", name), json);
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {

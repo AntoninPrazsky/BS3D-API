@@ -12,6 +12,7 @@ namespace BS3D.Api;
 public sealed class Ceilings
 {
     private readonly Dictionary<(string File, string Hash, int Rules), CeilingRow> _boards = new();
+    private readonly Dictionary<(string File, string Hash, int Rules), List<int[]>> _starFloors = new();
     private readonly Dictionary<string, (int Position, string? Block)> _levels = new();
 
     public int Count => _boards.Count;
@@ -28,6 +29,16 @@ public sealed class Ceilings
 
     public bool TryGet(string file, string hash, int rules, out CeilingRow row) =>
         _boards.TryGetValue((file, hash, rules), out row!);
+
+    /// <summary>
+    /// Whether a clear of <paramref name="score"/> earns <paramref name="stars"/> on <paramref name="board"/> by the star
+    /// floors of any table that states them (#16, BS3D#1024): one star for a clear, and one more for each floor the score
+    /// reaches. Any table and not only the newest: a retune of the game's <c>StarRating</c> moves the floors under an
+    /// unchanged board key, and a release already out keeps rating by the old ones. True where no table states them.
+    /// </summary>
+    public bool StarsMatch(BoardKey board, int score, int stars) =>
+        !_starFloors.TryGetValue((board.File, board.Hash, board.Rules), out List<int[]>? tables)
+        || tables.Exists(floors => 1 + floors.Count(floor => score >= floor) == stars);
 
     /// <summary>Every table in <paramref name="directory"/>; a file that is not one is logged and skipped.</summary>
     public static Ceilings Load(string directory, ILogger logger)
@@ -54,8 +65,16 @@ public sealed class Ceilings
                 // ScoreSim writes the rows in play order
                 for (int i = 0; i < table.Levels.Count; i++)
                 {
-                    ceilings.Add(table.Levels[i]);
-                    ceilings.Place(table.Levels[i], i);
+                    CeilingRow row = table.Levels[i];
+                    if (row.StarFloors != null && !IsStarFloors(row.StarFloors))
+                    {
+                        logger.LogWarning("{Path}: {File}#{Hash} has star floors that are not three rising scores; its stars go unchecked",
+                            Path.GetFileName(path), row.File, row.Hash);
+                        row = row with { StarFloors = null };
+                    }
+
+                    ceilings.Add(row);
+                    ceilings.Place(row, i);
                 }
 
                 logger.LogInformation("Ceilings: {Count} board(s) from {Path}", table.Levels.Count, Path.GetFileName(path));
@@ -79,7 +98,17 @@ public sealed class Ceilings
 
         if (!_boards.TryGetValue(key, out CeilingRow? known) || row.Ceiling > known.Ceiling)
             _boards[key] = row;
+
+        if (row.StarFloors is { } floors)
+        {
+            List<int[]> tables = _starFloors.TryGetValue(key, out List<int[]>? stated) ? stated : _starFloors[key] = new();
+            if (!tables.Exists(f => f.SequenceEqual(floors))) tables.Add(floors);
+        }
     }
+
+    /// <summary>The least scores for 2, 3 and 4 stars, as ScoreSim writes them: three, each above the last.</summary>
+    private static bool IsStarFloors(int[] floors) =>
+        floors.Length == 3 && floors[0] > 0 && floors[0] < floors[1] && floors[1] < floors[2];
 
     private void Place(CeilingRow row, int position)
     {
@@ -96,7 +125,10 @@ public sealed class Ceilings
     }
 }
 
-/// <summary>One level of a ceiling table, as ScoreSim writes it, with its chapter in a table that names one (<see cref="Ceilings.Levels"/>).</summary>
+/// <summary>
+/// One level of a ceiling table, as ScoreSim writes it, with its chapter in a table that names one (<see cref="Ceilings.Levels"/>)
+/// and its star floors in a table that states them (#16, BS3D#1024).
+/// </summary>
 public sealed record CeilingRow(
     [property: JsonPropertyName("file")] string File,
     [property: JsonPropertyName("name")] string? Name,
@@ -105,4 +137,5 @@ public sealed record CeilingRow(
     [property: JsonPropertyName("shots")] int Shots,
     [property: JsonPropertyName("ceiling")] int Ceiling,
     [property: JsonPropertyName("minShots")] int MinShots,
-    [property: JsonPropertyName("block")] string? Block = null);
+    [property: JsonPropertyName("block")] string? Block = null,
+    [property: JsonPropertyName("starFloors")] int[]? StarFloors = null);

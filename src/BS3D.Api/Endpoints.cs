@@ -39,7 +39,8 @@ public static partial class Endpoints
     }
 
     private static IResult PostScore(SubmissionRequest? body, HttpContext http, ScoreStore store, Ceilings ceilings,
-        IOptions<ScoresOptions> options, RateLimits limits, AddressHasher addresses, TimeProvider clock, ILogger<ScoreStore> log)
+        IOptions<ScoresOptions> options, RateLimits limits, PlayTimeBudgets budgets, AddressHasher addresses, TimeProvider clock,
+        ILogger<ScoreStore> log)
     {
         ScoresOptions o = options.Value;
 
@@ -75,6 +76,13 @@ public static partial class Endpoints
         BoardKey board = new(body.Level!.File!, body.Level.Hash!, body.RulesVersion);
         string? implausible = Implausible(body, board, ceilings, o);
         if (implausible != null) return Refuse(log, http, 422, implausible, $"{board.File}#{board.Hash} r{board.Rules} score {body.Score}");
+
+        //No more play claimed than has passed, beyond what an outbox may send at once (#16). After every final refusal,
+        //so a submission that can never pass spends nothing; and a 429, never final, so the game keeps a clear its outbox
+        //sent too soon and sends it again at its next drain
+        if (!budgets.TrySpend(body.PlayerId, body.DurationSeconds, o.PlayTimeAllowanceSeconds, out wait))
+            return RateLimited(log, http, wait,
+                FormattableString.Invariant($"player {body.PlayerId} claims {body.DurationSeconds:0.##} s of play"), Reasons.PlayTime);
 
         DateTimeOffset now = clock.GetUtcNow();
 
@@ -134,8 +142,9 @@ public static partial class Endpoints
 
     /// <summary>
     /// What makes a submission impossible, or null (issue #2). On a known board: over the ceiling, more shots than the
-    /// budget grants, and for a clear, fewer shots than any clear takes and faster than a human fires that many. Anywhere:
-    /// stars outside 0–4, and numbers that are not numbers.
+    /// budget grants, and for a clear, fewer shots than any clear takes, faster than a human fires that many, and stars
+    /// its score does not earn where a table states the board's star floors (#16). Anywhere: stars outside 0–4, and
+    /// numbers that are not numbers.
     /// </summary>
     private static string? Implausible(SubmissionRequest s, BoardKey board, Ceilings ceilings, ScoresOptions o)
     {
@@ -154,6 +163,9 @@ public static partial class Endpoints
         //The floors are a clear's: an unfinished attempt can end after one shot, or before any (#8)
         if (s.ShotsUsed < row.MinShots) return Reasons.BadShots;
         if (s.DurationSeconds < row.MinShots * o.MinSecondsPerShot) return Reasons.BadDuration;
+
+        //The game rates a clear by its score alone (StarRating.Rate), so a score earns exactly one number of stars (#16)
+        if (!ceilings.StarsMatch(board, s.Score, s.Stars)) return Reasons.BadStars;
 
         return null;
     }
@@ -259,14 +271,14 @@ public static partial class Endpoints
     }
 
     /// <summary>
-    /// A 429 with its wait. The log line names the address by its salted hash, the same one the audit column keeps, and
-    /// never the address itself: behind the tunnel that is the player's own IP, and the journal is no register of
-    /// addresses either (issue #2).
+    /// A 429 with its wait: a rate limit, or a play-time budget spent (#16). The log line names the address by its
+    /// salted hash, the same one the audit column keeps, and never the address itself: behind the tunnel that is the
+    /// player's own IP, and the journal is no register of addresses either (issue #2).
     /// </summary>
-    private static IResult RateLimited(ILogger log, HttpContext http, TimeSpan wait, string who)
+    private static IResult RateLimited(ILogger log, HttpContext http, TimeSpan wait, string who, string reason = Reasons.RateLimited)
     {
         http.Response.Headers.RetryAfter = ((int)Math.Ceiling(Math.Max(wait.TotalSeconds, 1))).ToString(CultureInfo.InvariantCulture);
-        return Refuse(log, http, 429, Reasons.RateLimited, who);
+        return Refuse(log, http, 429, reason, who);
     }
 
     private static IResult Refuse(ILogger log, HttpContext http, int status, string reason, string detail)
