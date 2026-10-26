@@ -280,6 +280,19 @@ public sealed class StatusTests : IDisposable
     }
 
     [Fact]
+    public void The_file_starts_with_its_json_and_no_byte_order_mark()
+    {
+        string file = Path.Combine(_folder, "status.json");
+
+        // As the snapshot's relaxed encoder writes a nickname: its letters, not their escapes
+        StatusFeed.Write(file, "{\"player\":\"Řehoř\"}");
+
+        byte[] bytes = File.ReadAllBytes(file);
+        Assert.Equal((byte)'{', bytes[0]);
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes("{\"player\":\"Řehoř\"}\n"), bytes);
+    }
+
+    [Fact]
     public void A_file_of_another_mode_is_written_0640_all_the_same()
     {
         string file = Path.Combine(_folder, "status.json");
