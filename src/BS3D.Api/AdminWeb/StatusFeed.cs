@@ -103,7 +103,9 @@ public static class StatusFeed
 
     /// <summary>
     /// Writes <paramref name="json"/> to <paramref name="file"/> so that no reader ever sees half of it: into a temporary
-    /// file beside it, created 0640 (its owner and its group, the readers'), then renamed over the old one.
+    /// file beside it, created 0640 (its owner and its group, the readers'), then renamed over the old one. UTF-8 with no
+    /// byte order mark, which JSON must not start with: BS3D-LCD's reader refuses the file that starts with one, as every
+    /// snapshot up to v0.1.30 did (<see cref="System.Text.Encoding.UTF8"/> writes it).
     /// </summary>
     public static void Write(string file, string json)
     {
@@ -111,7 +113,7 @@ public static class StatusFeed
         FileStreamOptions create = new() { Mode = FileMode.Create, Access = FileAccess.Write };
         if (!OperatingSystem.IsWindows())
             create.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
-        using (StreamWriter writer = new(temporary, System.Text.Encoding.UTF8, create))
+        using (StreamWriter writer = new(temporary, new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false), create))
             writer.Write(json + "\n");
         // A file left by a run under another umask keeps its mode when it is created again; set it every time
         if (!OperatingSystem.IsWindows())
