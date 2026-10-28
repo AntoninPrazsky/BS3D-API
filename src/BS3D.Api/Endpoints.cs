@@ -31,6 +31,7 @@ public static partial class Endpoints
         app.MapPost("/v1/scores", PostScore);
         app.MapGet("/v1/boards/{file}", GetBoard);
         app.MapGet("/v1/boards", GetBoards);
+        app.MapGet("/v1/ranking", GetRanking);
         app.MapPut("/v1/players/{id:guid}", PutPlayer);
         app.MapDelete("/v1/players/{id:guid}", DeletePlayer);
         MapNoteEndpoint(app);
@@ -176,18 +177,7 @@ public static partial class Endpoints
         int? offset, Guid? player, ScoreStore store, TimeProvider clock, ILogger<ScoreStore> log, HttpContext http)
     {
         if (string.IsNullOrWhiteSpace(hash) || rules == null) return Refuse(log, http, 400, Reasons.BadRequest, "hash and rules are required");
-
-        bool allTime = string.Equals(period, "all", StringComparison.OrdinalIgnoreCase);
-        if (!allTime && period != null && !string.Equals(period, "month", StringComparison.OrdinalIgnoreCase))
-            return Refuse(log, http, 400, Reasons.BadRequest, $"period '{period}'");
-
-        string? boardMonth = null;
-        if (!allTime)
-        {
-            boardMonth = month ?? ScoreStore.MonthOf(clock.GetUtcNow());
-            if (!DateTime.TryParseExact(boardMonth, "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
-                return Refuse(log, http, 400, Reasons.BadRequest, $"month '{month}'");
-        }
+        if (ReadPeriod(period, month, clock, log, http, out bool allTime, out string? boardMonth) is { } refused) return refused;
 
         int take = Math.Clamp(limit ?? 20, 1, 100);
         int skip = Math.Max(offset ?? 0, 0);
@@ -217,17 +207,7 @@ public static partial class Endpoints
     private static IResult GetBoards(string? period, string? month, Guid? player, ScoreStore store, Ceilings ceilings,
         IOptions<ScoresOptions> options, TimeProvider clock, ILogger<ScoreStore> log, HttpContext http)
     {
-        bool allTime = string.Equals(period, "all", StringComparison.OrdinalIgnoreCase);
-        if (!allTime && period != null && !string.Equals(period, "month", StringComparison.OrdinalIgnoreCase))
-            return Refuse(log, http, 400, Reasons.BadRequest, $"period '{period}'");
-
-        string? boardMonth = null;
-        if (!allTime)
-        {
-            boardMonth = month ?? ScoreStore.MonthOf(clock.GetUtcNow());
-            if (!DateTime.TryParseExact(boardMonth, "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out _))
-                return Refuse(log, http, 400, Reasons.BadRequest, $"month '{month}'");
-        }
+        if (ReadPeriod(period, month, clock, log, http, out bool allTime, out string? boardMonth) is { } refused) return refused;
 
         using SqliteConnection c = store.Open();
         List<BoardSummary> boards = store.Summary(c, boardMonth, player, BuildsAskedBy(http));
@@ -235,6 +215,54 @@ public static partial class Endpoints
         if (options.Value.RequireKnownBoard) boards.RemoveAll(b => !ceilings.TryGet(b.File, b.Hash, b.Rules, out _));
 
         return Results.Json(new BoardsSummary(allTime ? "all" : "month", boardMonth, boards), Json);
+    }
+
+    /// <summary>
+    /// The players ranked across the campaign (#11, the game's Top Players screen, BS3D#827): per level a player's best
+    /// clear in the period on <paramref name="rules"/>, added up, by <see cref="ScoreStore.Ranking"/>'s rule, among the
+    /// scores the asking build sees (#17). The period, the month, the limit and the offset are read exactly as
+    /// <see cref="GetBoard"/> reads them. With <see cref="ScoresOptions.RequireKnownBoard"/> on, a clear on a board no
+    /// ceiling table names is left out before the sum.
+    /// </summary>
+    private static IResult GetRanking(int? rules, string? period, string? month, int? limit, int? offset, Guid? player,
+        ScoreStore store, Ceilings ceilings, IOptions<ScoresOptions> options, TimeProvider clock, ILogger<ScoreStore> log,
+        HttpContext http)
+    {
+        if (rules == null) return Refuse(log, http, 400, Reasons.BadRequest, "rules is required");
+        if (ReadPeriod(period, month, clock, log, http, out bool allTime, out string? boardMonth) is { } refused) return refused;
+
+        int take = Math.Clamp(limit ?? 20, 1, 100);
+        int skip = Math.Max(offset ?? 0, 0);
+        List<BoardKey>? known = options.Value.RequireKnownBoard
+            ? ceilings.All.Select(b => new BoardKey(b.File, b.Hash, b.RulesVersion)).ToList()
+            : null;
+
+        using SqliteConnection c = store.Open();
+        var (total, page, me) = store.RankPlayers(c, rules.Value, boardMonth, known, take, skip, player, BuildsAskedBy(http));
+
+        return Results.Json(new RankingPage(allTime ? "all" : "month", boardMonth, rules.Value, total,
+            page.Select(r => new RankingEntry(r.Rank, r.Name, r.Levels, r.Stars, r.Score, r.At)).ToList(),
+            me is { } mine ? new RankingMe(mine.Rank, mine.Levels, mine.Stars, mine.Score) : null), Json);
+    }
+
+    /// <summary>
+    /// A GET's period, read alike by a board, every board and the ranking: <c>month</c> (the default) or <c>all</c>; for a
+    /// month, <paramref name="month"/> as <c>yyyy-MM</c>, or this UTC month when none is given. The refusal of a period or
+    /// a month that is neither, else null.
+    /// </summary>
+    private static IResult? ReadPeriod(string? period, string? month, TimeProvider clock, ILogger log, HttpContext http,
+        out bool allTime, out string? boardMonth)
+    {
+        allTime = string.Equals(period, "all", StringComparison.OrdinalIgnoreCase);
+        boardMonth = null;
+        if (!allTime && period != null && !string.Equals(period, "month", StringComparison.OrdinalIgnoreCase))
+            return Refuse(log, http, 400, Reasons.BadRequest, $"period '{period}'");
+        if (allTime) return null;
+
+        boardMonth = month ?? ScoreStore.MonthOf(clock.GetUtcNow());
+        return DateTime.TryParseExact(boardMonth, "yyyy-MM", CultureInfo.InvariantCulture, DateTimeStyles.None, out _)
+            ? null
+            : Refuse(log, http, 400, Reasons.BadRequest, $"month '{month}'");
     }
 
     /// <summary>

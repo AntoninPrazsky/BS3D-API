@@ -28,13 +28,22 @@ public sealed partial class ScoreStore
     /// grouping is the one <c>PARTITION BY</c> in <c>best</c> below.
     /// </para>
     /// <para>
-    /// The status snapshot's Top players (#13) reads it over every build's scores; <c>GET /v1/ranking</c> (#11) is to
-    /// answer with it over the scores the asking build sees (<paramref name="builds"/>, #17): a release never ranks a
-    /// score a dev build sent.
+    /// The status snapshot's Top players (#13) reads it over every build's scores; <c>GET /v1/ranking</c> (#11) answers
+    /// with it over the scores the asking build sees (<paramref name="builds"/>, #17): a release never ranks a score a
+    /// dev build sent.
     /// </para>
     /// </summary>
     public List<RankingRow> Ranking(SqliteConnection c, int rules, string? month, IEnumerable<BoardKey>? known, int limit, int offset = 0,
-        Builds builds = Builds.All)
+        Builds builds = Builds.All) =>
+        RankPlayers(c, rules, month, known, limit, offset, null, builds).Page;
+
+    /// <summary>
+    /// One page of <see cref="Ranking"/>, how many players it ranks in all, and <paramref name="player"/>'s own row
+    /// wherever it falls (null with no player, or when they are not ranked): what <c>GET /v1/ranking</c> answers (#11).
+    /// One statement, so the page, the count and the player's place cannot rank differently.
+    /// </summary>
+    public (int Total, List<RankingRow> Page, RankingRow? Me) RankPlayers(SqliteConnection c, int rules, string? month,
+        IEnumerable<BoardKey>? known, int limit, int offset, Guid? player, Builds builds = Builds.All)
     {
         string? boards = known == null ? null
             : JsonSerializer.Serialize(known.Where(b => b.Rules == rules).Select(b => new[] { b.File, b.Hash }));
@@ -57,20 +66,35 @@ public sealed partial class ScoreStore
             totals AS (
                 SELECT player_id, MAX(name) AS name, COUNT(*) AS levels, SUM(stars) AS stars, SUM(score) AS score,
                        MAX(seq) AS reached
-                FROM best WHERE pick = 1 GROUP BY player_id)
-            SELECT ROW_NUMBER() OVER (ORDER BY t.score DESC, t.reached ASC) AS rank, t.name, t.levels, t.stars, t.score,
-                   (SELECT received_at FROM submissions WHERE rowid = t.reached)
-            FROM totals t
-            ORDER BY rank
-            LIMIT $limit OFFSET $offset
+                FROM best WHERE pick = 1 GROUP BY player_id),
+            ranked AS (
+                SELECT ROW_NUMBER() OVER (ORDER BY score DESC, reached ASC) AS rank, player_id, name, levels, stars, score, reached
+                FROM totals)
+            -- The count's row comes even when no player falls on the page, so a page past the end still says how many there are
+            SELECT n.total, r.rank, r.name, r.levels, r.stars, r.score,
+                   (SELECT received_at FROM submissions WHERE rowid = r.reached), COALESCE(r.player_id = $player, 0)
+            FROM (SELECT COUNT(*) AS total FROM totals) n
+            LEFT JOIN ranked r ON (r.rank > $offset AND r.rank <= $offset + $limit) OR r.player_id = $player
+            ORDER BY r.rank
             """, ("$rules", rules), ("$month", (object?)month ?? DBNull.Value), ("$known", (object?)boards ?? DBNull.Value),
-            ("$limit", limit), ("$offset", offset), ("$releases", ReleasesOnly(builds)));
+            ("$limit", limit), ("$offset", offset), ("$player", (object?)player?.ToString() ?? DBNull.Value),
+            ("$releases", ReleasesOnly(builds)));
 
-        List<RankingRow> rows = new();
+        int total = 0;
+        List<RankingRow> page = new();
+        RankingRow? me = null;
         using SqliteDataReader r = cmd.ExecuteReader();
         while (r.Read())
-            rows.Add(new RankingRow(r.GetInt32(0), r.GetString(1), r.GetInt32(2), r.GetInt32(3), r.GetInt64(4),
-                DateTimeOffset.Parse(r.GetString(5), System.Globalization.CultureInfo.InvariantCulture)));
-        return rows;
+        {
+            total = r.GetInt32(0);
+            if (r.IsDBNull(1)) continue;
+
+            RankingRow row = new(r.GetInt32(1), r.GetString(2), r.GetInt32(3), r.GetInt32(4), r.GetInt64(5),
+                DateTimeOffset.Parse(r.GetString(6), System.Globalization.CultureInfo.InvariantCulture));
+            if (row.Rank > offset && row.Rank <= (long)offset + limit) page.Add(row);
+            if (r.GetInt64(7) == 1) me = row;
+        }
+
+        return (total, page, me);
     }
 }
