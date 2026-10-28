@@ -24,11 +24,14 @@ public sealed partial class AdminData
     /// </param>
     /// <param name="BackupBytes">The size of each day's last backup on the box, NaN on a day with none kept.</param>
     /// <param name="Copies">The newest good copy's age, on the box, off it and off the site, those set up.</param>
+    /// <param name="HourClears">The range's clears by the UTC hour they arrived in, <c>[0]</c> from 00:00 to 01:00 (chart 4).</param>
+    /// <param name="HourUnfinished">The range's unfinished attempts by the UTC hour they arrived in.</param>
     public sealed record Charts(string Range, IReadOnlyList<string> Days,
         int[] NewPlayers, int[] FirstDayPlayers, int[] ReturningPlayers, int[] Clears, int[] Unfinished, double[] Minutes,
         int[] PlayersTotal, int[] ClearsTotal, int[] UnfinishedTotal, int[] BoardsCleared,
         IReadOnlyList<(string Reason, int[] Counts)> Refusals,
-        IReadOnlyList<(string Version, double[] Share)> Versions, double[] BackupBytes, IReadOnlyList<CopyAges> Copies);
+        IReadOnlyList<(string Version, double[] Share)> Versions, double[] BackupBytes, IReadOnlyList<CopyAges> Copies,
+        int[] HourClears, int[] HourUnfinished);
 
     /// <summary>
     /// A copy's age (#6) over the range: the oldest its newest good copy got during each UTC day, in days, NaN while no good
@@ -169,6 +172,16 @@ public sealed partial class AdminData
             copies.Add(Ages(name, days, now, good, failed, last.Every));
         }
 
+        // When people play: the range's submissions by the hour of the day they arrived, the stored time being UTC
+        int[] hourClears = new int[24], hourUnfinished = new int[24];
+        using (SqliteCommand cmd = Command(c, """
+            SELECT CAST(substr(received_at, 12, 2) AS INTEGER) AS h, COUNT(CASE WHEN stars > 0 THEN 1 END), COUNT(CASE WHEN stars = 0 THEN 1 END)
+            FROM submissions WHERE substr(received_at, 1, 10) >= $from GROUP BY h
+            """, "$from", from))
+        using (SqliteDataReader r = cmd.ExecuteReader())
+            while (r.Read())
+                if (r.GetInt32(0) is int h and >= 0 and < 24) (hourClears[h], hourUnfinished[h]) = (r.GetInt32(1), r.GetInt32(2));
+
         int Before(string sql) => (int)Scalar(c, sql, "$from", from);
         return new Charts(range, days, newPlayers, firstDay, returning, clears, unfinished, minutes,
             Running(Before("SELECT COUNT(*) FROM players WHERE substr(created_at, 1, 10) < $from"), newPlayers),
@@ -179,7 +192,7 @@ public sealed partial class AdminData
                                       GROUP BY level_file, level_hash, rules_version) WHERE d < $from
                 """), boards),
             refusals.OrderByDescending(p => p.Value.Sum()).ThenBy(p => p.Key, StringComparer.Ordinal).Select(p => (p.Key, p.Value)).ToList(),
-            shares, backupBytes, copies);
+            shares, backupBytes, copies, hourClears, hourUnfinished);
     }
 
     /// <summary>

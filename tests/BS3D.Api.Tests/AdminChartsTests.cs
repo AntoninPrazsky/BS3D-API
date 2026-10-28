@@ -316,6 +316,50 @@ public sealed class AdminChartsTests
     }
 
     [Fact]
+    public async Task When_people_play_counts_the_range_s_submissions_by_the_UTC_hour_they_arrived_in()
+    {
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) =>
+        {
+            Guid ann = AdminPage.AddPlayer(store, c, now, "Ann");
+            AdminPage.AddClear(store, c, new DateTimeOffset(2026, 9, 14, 23, 30, 0, TimeSpan.Zero), ann, 100);
+            AdminPage.AddClear(store, c, new DateTimeOffset(2026, 9, 14, 23, 59, 0, TimeSpan.Zero), ann, 100, stars: 0);
+            AdminPage.AddClear(store, c, new DateTimeOffset(2026, 9, 15, 0, 10, 0, TimeSpan.Zero), ann, 100);
+            AdminPage.AddClear(store, c, new DateTimeOffset(2026, 8, 1, 23, 0, 0, TimeSpan.Zero), ann, 100);   // before the 14 days
+        });
+
+        AdminData data = new(page.Options);
+        AdminData.Charts ch = data.ReadCharts("14d");
+        Assert.Equal((1, 1, 1), (ch.HourClears[23], ch.HourUnfinished[23], ch.HourClears[0]));
+        Assert.Equal(3, ch.HourClears.Sum() + ch.HourUnfinished.Sum());
+        Assert.Equal(2, data.ReadCharts("all").HourClears[23]);
+
+        await page.LogInAsync();
+        string html = WebUtility.HtmlDecode(await page.Client.GetStringAsync("/charts?range=14d"));
+        Assert.Contains("<title>23:00–00:00 · Clears: 1</title>", html);
+        Assert.Contains("<tr><td>00:00–01:00</td><td class=\"n\">1</td><td class=\"n\">0</td></tr>", html);
+    }
+
+    [Fact]
+    public void A_bar_without_a_value_is_no_bar_and_a_dash_in_the_numbers()
+    {
+        Markup chart = AdminPages.BarChart("Test", AdminPages.CategoryAxis("Level", [("A", "A"), ("B", "B")]),
+            [new("Median", "c1", [3, double.NaN]), new("Left", "c6", [2, double.NaN])], integer: false);
+
+        Assert.Equal(2, Regex.Matches(chart.Value, "<rect ").Count);
+        Assert.Contains("<tr><td>B</td><td class=\"n\">–</td><td class=\"n\">–</td></tr>", chart.Value);
+        Assert.DoesNotContain("NaN", chart.Value);
+        // The axis runs to the stack's top, 5, rounded up to its step: NaN adds nothing to the stack
+        Assert.Contains(">6</text>", chart.Value);
+
+        // Nothing but NaN, as on a boards list nobody has cleared a level of: an axis of nothing, no bar
+        Markup empty = AdminPages.BarChart("Test", AdminPages.CategoryAxis("Level", [("A", "A"), ("B", "B")]),
+            [new("Median", "c1", [double.NaN, double.NaN])], integer: false);
+        Assert.DoesNotContain("<rect ", empty.Value);
+        Assert.DoesNotContain("NaN", empty.Value);
+        Assert.Contains(">0.1</text>", empty.Value);
+    }
+
+    [Fact]
     public async Task The_page_draws_every_chart_and_names_its_range()
     {
         await using AdminPage page = await Seeded();
@@ -323,7 +367,7 @@ public sealed class AdminChartsTests
 
         string html = await page.Client.GetStringAsync("/charts?range=14d");
 
-        Assert.Equal(10, Regex.Matches(html, "<svg class=\"chart\"").Count);
+        Assert.Equal(11, Regex.Matches(html, "<svg class=\"chart\"").Count);
         Assert.Contains("<span aria-current=\"true\">14 days</span>", html);
         Assert.Contains("<a href=\"/charts?range=all\">All</a>", html);
         Assert.Contains("2026-09-02 to 2026-09-15", html);

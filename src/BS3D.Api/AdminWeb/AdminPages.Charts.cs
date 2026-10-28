@@ -58,6 +58,11 @@ public static partial class AdminPages
         Markup copies = LineChart("Age of the newest copy per day, in days", d,
             ch.Copies.Select((c, i) => new ChartSeries(c.Name, copyColours[i % copyColours.Length], c.Age, c.Marks)).ToList(), integer: false);
 
+        // Every third hour is labelled: 24 labels would run into each other on a phone
+        Markup hours = BarChart("Submissions by the hour of the day (UTC)",
+            CategoryAxis("Hour (UTC)", Enumerable.Range(0, 24).Select(h => ($"{h:00}:00–{(h + 1) % 24:00}:00", h % 3 == 0 ? $"{h:00}" : "")).ToList()),
+            [new("Clears", "c1", Of(ch.HourClears)), new("Unfinished", "c2", Of(ch.HourUnfinished))], integer: true);
+
         return Layout("Charts", Html.M($"""
             <div class="ranges">{Range("14d", "14 days")}{Range("90d", "90 days")}{Range("all", "All")}</div>
             <p class="note">One value per UTC day, {d[0]} to {d[^1]}; no range starts before the first day anything was recorded. What the service received, hidden players included: the boards themselves leave hidden players out. A bar or a point shows its number under the pointer, and each chart's numbers are under it.</p>
@@ -68,6 +73,7 @@ public static partial class AdminPages
             <section><h2>Clears and unfinished attempts, per day</h2>{BarChart("Clears and unfinished attempts per day", d, [new("Clears", "c1", Of(ch.Clears)), new("Unfinished", "c2", Of(ch.Unfinished))], integer: true)}</section>
             <section><h2>Boards with a clear</h2>{LineChart("Boards with a clear", d, [new("Boards", "c3", Of(ch.BoardsCleared))])}</section>
             <section><h2>Minutes played, per day</h2>{BarChart("Minutes played per day", d, [new("Minutes", "c5", ch.Minutes)], integer: false)}</section>
+            <section><h2>When people play, by the hour</h2><p class="note">The range's clears and unfinished attempts by the hour of the day they arrived in, UTC: 00 is midnight to one in the morning (Prague is one hour ahead in winter, two in summer). The quietest hours are the time for a deploy. By weekday and hour, once there is enough to read.</p>{hours}</section>
             <section><h2>Refusals, per day</h2>{refusals}</section>
             <section><h2>Game versions, % of each day's submissions</h2><p class="note">The {AdminData.ReleaseSeries} releases sent most in this range apart, newest on top; every local build (<code>dev-…</code>, the owner's and the agents') together in grey.</p>{versions}</section>
             <section><h2>Database size, from the backups</h2><p class="note">Each day's last backup on the box, which keeps {AdminData.BackupKeepDays} days of them: a day without one has no point.</p>{sizes}</section>
@@ -141,12 +147,16 @@ public static partial class AdminPages
     public static Markup BarChart(string label, IReadOnlyList<string> days, IReadOnlyList<ChartSeries> series, bool integer) =>
         BarChart(label, DayAxis(days), series, integer);
 
-    /// <summary>Stacked bars, one per slot of <paramref name="x"/>, the series bottom to top in the order given.</summary>
+    /// <summary>
+    /// Stacked bars, one per slot of <paramref name="x"/>, the series bottom to top in the order given. A NaN value has no
+    /// bar and stands as a dash in the numbers: a level nobody cleared has no median, which is not a median of 0.
+    /// </summary>
     public static Markup BarChart(string label, XAxis x, IReadOnlyList<ChartSeries> series, bool integer)
     {
         IReadOnlyList<string> keys = x.Keys;
         int n = keys.Count;
-        (double top, double step) = Scale(Enumerable.Range(0, n).Select(i => series.Sum(s => s.Values[i])).DefaultIfEmpty(0).Max(), integer);
+        (double top, double step) = Scale(Enumerable.Range(0, n).Select(i => series.Sum(s => double.IsFinite(s.Values[i]) ? s.Values[i] : 0))
+            .DefaultIfEmpty(0).Max(), integer);
         double slot = (x.Width - Left - Right) / Math.Max(n, 1), width = Math.Clamp(slot * 0.72, 1, MaxBarWidth);
         List<Markup> bars = new();
         for (int i = 0; i < n; i++)
@@ -155,7 +165,7 @@ public static partial class AdminPages
             foreach (ChartSeries s in series)
             {
                 double value = s.Values[i];
-                if (value <= 0) continue;
+                if (!(value > 0) || !double.IsFinite(value)) continue;
                 double height = value / top * PlotHeight;
                 y -= height;
                 bars.Add(Html.M($"<rect class=\"{s.Colour}\" x=\"{Left + i * slot + (slot - width) / 2:0.##}\" y=\"{y:0.##}\" width=\"{width:0.##}\" height=\"{height:0.##}\"><title>{keys[i]} · {s.Name}: {Number(value, integer)}</title></rect>"));

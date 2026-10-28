@@ -30,10 +30,30 @@ public sealed partial class AdminData
     /// </summary>
     public sealed record ScoreBins(int[] Clears, int[] Unfinished);
 
-    /// <summary>One level of the funnel (#9), every version of it together.</summary>
+    /// <summary>One level of the boards list's charts (#9), every version of it together.</summary>
     /// <param name="Cleared">Visible players who cleared it, on any version.</param>
     /// <param name="Unfinished">Visible players who tried it and never cleared any version: their row on its boards is unfinished.</param>
-    public sealed record FunnelLevel(string File, string Name, string? Chapter, int Cleared, int Unfinished);
+    /// <param name="Stars">
+    /// How many of the cleared players' best clears (each player's highest score on the level, any version) earned 1, 2, 3
+    /// and 4 stars: <c>[0]</c> is one star. They add up to <paramref name="Cleared"/>.
+    /// </param>
+    /// <param name="MedianShots">The median of those best clears' shots, null when nobody cleared the level.</param>
+    /// <param name="MedianSeconds">The median of their times, in seconds, null when nobody cleared the level.</param>
+    /// <param name="Budget">The shot budget of the level as the last table read that names its file has it.</param>
+    public sealed record FunnelLevel(string File, string Name, string? Chapter, int Cleared, int Unfinished,
+        int[] Stars, double? MedianShots, double? MedianSeconds, int Budget);
+
+    /// <summary>
+    /// One player's progress (#9, chart 12): one value per UTC day from their first submission's day to today, as the charts
+    /// page's days are, and their best clear on each level.
+    /// </summary>
+    /// <param name="LevelsCleared">The levels they had cleared by each day's end, a level's versions once, those before the days included.</param>
+    /// <param name="Best">
+    /// Each level they cleared on a board a table names, in the boards list's order: their best clear's score as a share
+    /// of that board's ceiling, in per cent, the best of its versions.
+    /// </param>
+    public sealed record PlayerProgress(IReadOnlyList<string> Days, int[] LevelsCleared, int[] Clears, int[] Unfinished,
+        IReadOnlyList<(string Name, string? Chapter, double Share)> Best);
 
     public sealed record PlayerRow(Guid Id, string Name, DateTimeOffset Created, bool Hidden, int Clears, int Unfinished,
         DateTimeOffset? LastPlayed, int Addresses, IReadOnlyList<(Guid Id, string Name)> SharesWith);
@@ -167,6 +187,26 @@ public sealed partial class AdminData
     public IReadOnlyList<FunnelLevel> ReadFunnel(Ceilings ceilings)
     {
         using SqliteConnection c = Open();
+        // Each visible player's best clear of each level, any version: the highest score, ties to the earlier
+        Dictionary<string, List<(int Stars, int Shots, double Seconds)>> best = new();
+        using (SqliteCommand cmd = c.CreateCommand())
+        {
+            cmd.CommandText = """
+                SELECT f, stars, shots, seconds FROM (
+                    SELECT s.level_file AS f, s.stars, s.shots_used AS shots, s.duration_seconds AS seconds,
+                           ROW_NUMBER() OVER (PARTITION BY s.level_file, s.player_id ORDER BY s.score DESC, s.rowid) AS pick
+                    FROM submissions s JOIN players p ON p.id = s.player_id
+                    WHERE p.hidden = 0 AND s.stars > 0)
+                WHERE pick = 1
+                """;
+            using SqliteDataReader r = cmd.ExecuteReader();
+            while (r.Read())
+            {
+                if (!best.TryGetValue(r.GetString(0), out var clears)) best[r.GetString(0)] = clears = new();
+                clears.Add((r.GetInt32(1), r.GetInt32(2), r.GetDouble(3)));
+            }
+        }
+
         Dictionary<string, (int Cleared, int Unfinished)> counts = new();
         using (SqliteCommand cmd = c.CreateCommand())
         {
@@ -181,6 +221,25 @@ public sealed partial class AdminData
             while (r.Read()) counts[r.GetString(0)] = (r.GetInt32(1), r.GetInt32(2));
         }
 
+        // A level's budget as its name is: from the last table read that names the file
+        Dictionary<string, int> budgets = ceilings.All.GroupBy(row => row.File).ToDictionary(g => g.Key, g => g.Last().Shots);
+        return LevelsInPlayOrder(ceilings).Select(l =>
+        {
+            var n = counts.GetValueOrDefault(l.File);
+            List<(int Stars, int Shots, double Seconds)> clears = best.GetValueOrDefault(l.File) ?? [];
+            int[] stars = new int[Endpoints.MaxStars];
+            foreach (var clear in clears) stars[Math.Clamp(clear.Stars, 1, Endpoints.MaxStars) - 1]++;
+            return new FunnelLevel(l.File, l.Name, l.Chapter, n.Cleared, n.Unfinished, stars,
+                Median(clears.Select(x => (double)x.Shots)), Median(clears.Select(x => x.Seconds)), budgets.GetValueOrDefault(l.File));
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Every level file a ceiling table names, with its name, in the boards list's order: chapter by chapter, a chapter where
+    /// its first level comes, play order within; the levels without a chapter after every chapter.
+    /// </summary>
+    private static List<(string File, string Name, string? Chapter)> LevelsInPlayOrder(Ceilings ceilings)
+    {
         Dictionary<string, string> names = ceilings.All.GroupBy(row => row.File)
             .ToDictionary(g => g.Key, g => g.Select(row => row.Name).LastOrDefault(name => name != null) ?? g.Key);
         var levels = ceilings.Levels.Select(l => (File: l.Key, l.Value.Position, Chapter: l.Value.Block)).ToList();
@@ -188,11 +247,63 @@ public sealed partial class AdminData
         return levels
             .OrderBy(l => l.Chapter is { } chapter ? opens[chapter] : int.MaxValue).ThenBy(l => l.Chapter, StringComparer.Ordinal)
             .ThenBy(l => l.Position).ThenBy(l => l.File, StringComparer.OrdinalIgnoreCase)
-            .Select(l =>
-            {
-                var n = counts.GetValueOrDefault(l.File);
-                return new FunnelLevel(l.File, names.GetValueOrDefault(l.File, l.File), l.Chapter, n.Cleared, n.Unfinished);
-            }).ToList();
+            .Select(l => (l.File, names.GetValueOrDefault(l.File, l.File), l.Chapter)).ToList();
+    }
+
+    /// <summary>The middle value, or the mean of the two middle ones; null for none.</summary>
+    public static double? Median(IEnumerable<double> values)
+    {
+        List<double> sorted = values.Order().ToList();
+        if (sorted.Count == 0) return null;
+        int half = sorted.Count / 2;
+        return sorted.Count % 2 == 1 ? sorted[half] : (sorted[half - 1] + sorted[half]) / 2;
+    }
+
+    /// <summary>
+    /// One player's progress (#9, chart 12), hidden or not, as the player view shows every player; null for a player who has
+    /// sent nothing. Clears and unfinished attempts are counted on the day they arrived (UTC).
+    /// </summary>
+    public PlayerProgress? ReadProgress(Guid id, Ceilings ceilings)
+    {
+        using SqliteConnection c = Open();
+        List<(string Day, BoardKey Board, int Score, int Stars)> rows = new();
+        using (SqliteCommand cmd = Command(c, """
+            SELECT substr(received_at, 1, 10), level_file, level_hash, rules_version, score, stars
+            FROM submissions WHERE player_id = $p ORDER BY rowid
+            """, "$p", id.ToString()))
+        using (SqliteDataReader r = cmd.ExecuteReader())
+            while (r.Read())
+                rows.Add((r.GetString(0), new BoardKey(r.GetString(1), r.GetString(2), r.GetInt32(3)), r.GetInt32(4), r.GetInt32(5)));
+        if (rows.Count == 0) return null;
+
+        DateTime today = options.Clock.GetUtcNow().UtcDateTime.Date;
+        DateTime first = DateTime.ParseExact(rows.Min(r => r.Day)!, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (first > today) first = today;
+        if ((today - first).TotalDays >= MaxChartDays) first = today.AddDays(1 - MaxChartDays);
+        List<string> days = Enumerable.Range(0, (int)(today - first).TotalDays + 1).Select(i => DayText(first.AddDays(i))).ToList();
+        Dictionary<string, int> index = days.Select((d, i) => (d, i)).ToDictionary(p => p.d, p => p.i);
+
+        int n = days.Count;
+        int[] clears = new int[n], unfinished = new int[n], cleared = new int[n];
+        HashSet<string> levels = new();
+        int before = 0;
+        foreach (var row in rows.OrderBy(r => r.Day, StringComparer.Ordinal))
+        {
+            bool shown = index.TryGetValue(row.Day, out int i);
+            if (shown) (row.Stars > 0 ? clears : unfinished)[i]++;
+            // A level once, whichever version, on the day of its first clear
+            if (row.Stars > 0 && levels.Add(row.Board.File))
+                if (shown) cleared[i]++;
+                else if (string.CompareOrdinal(row.Day, days[0]) < 0) before++;
+        }
+
+        Dictionary<string, double> shares = new();
+        foreach (var row in rows.Where(r => r.Stars > 0))
+            if (ceilings.TryGet(row.Board.File, row.Board.Hash, row.Board.Rules, out CeilingRow ceiling) && ceiling.Ceiling > 0)
+                shares[row.Board.File] = Math.Max(shares.GetValueOrDefault(row.Board.File), 100.0 * row.Score / ceiling.Ceiling);
+
+        return new PlayerProgress(days, Running(before, cleared), clears, unfinished,
+            LevelsInPlayOrder(ceilings).Where(l => shares.ContainsKey(l.File)).Select(l => (l.Name, l.Chapter, shares[l.File])).ToList());
     }
 
     /// <summary>Every player, in one of <see cref="PlayerOrders"/> (an unknown order falls back to the name).</summary>
