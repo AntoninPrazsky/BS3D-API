@@ -6,16 +6,11 @@ namespace BS3D.Api.AdminWeb;
 public static partial class AdminPages
 {
     /// <param name="noTables">The ceilings directory, when no table was read from it: then every board is "in no ceiling table".</param>
-    /// <param name="funnel">Every named level's players (#9), drawn above the list when there is one.</param>
+    /// <param name="funnel">Every named level's players, stars, shots and time (#9), drawn above the list when there is one.</param>
     public static string Boards(IReadOnlyList<AdminData.BoardRow> boards, string month, TimeZoneInfo zone, string? noTables = null,
         IReadOnlyList<AdminData.FunnelLevel>? funnel = null)
     {
-        Markup chart = funnel is not { Count: > 0 } ? default : Html.M($"""
-            <h2>Players per level, all time</h2>
-            {BarChart("Players per level, all time", LevelAxis(funnel.Select(l => (l.Name, l.Chapter)).ToList()),
-                [new("Cleared", "c1", funnel.Select(l => (double)l.Cleared).ToList()), new("Not cleared yet", "c2", funnel.Select(l => (double)l.Unfinished).ToList())], integer: true)}
-            <p class="note">Each level once, its versions together, in the order of the list below: where the bars drop is where players stop. Hidden players are not counted. "Not cleared yet" is a player who tried the level and never cleared it.</p>
-            """);
+        Markup chart = funnel is not { Count: > 0 } ? default : LevelCharts(funnel);
         int unknown = boards.Count(b => !b.Known);
         Markup missing = noTables == null ? default
             : Html.M($"<p class=\"warn\">No ceiling table in <code>{noTables}</code> (Scores__CeilingsDirectory): only the boards with submissions are listed.</p>");
@@ -33,6 +28,36 @@ public static partial class AdminPages
             {missing}{chart}<h2>Boards</h2><p class="note">{boards.Count} boards: every board a ceiling table names{(unknown > 0 ? Html.M($", and {unknown} with submissions that no table names") : default)}, {(chaptered ? "chapter by chapter in play order" : "in play order (the tables name no chapters)")}. Players are the rows of the game's boards: each visible player once, hidden players not counted, and an unfinished attempt only for a player who has never cleared the board. Clears and unfinished attempts count every one sent.</p>
             <div class="panel"><table><tr><th>Level</th><th>Board</th><th class="n">Ceiling</th><th class="n">Shots</th><th class="n">Players {month}</th><th class="n">Players all time</th><th class="n">Clears</th><th class="n">Unfinished</th><th>Last played ({ZoneName(zone)})</th></tr>{rows}</table></div>
             """), refresh: false);
+    }
+
+    /// <summary>
+    /// The boards list's charts (#9), each level once, its versions together, in the list's order: the funnel (7), the stars
+    /// of the players' best clears (8), and those clears' median shots against the budget and their median time (9).
+    /// </summary>
+    private static Markup LevelCharts(IReadOnlyList<AdminData.FunnelLevel> funnel)
+    {
+        XAxis Axis() => LevelAxis(funnel.Select(l => (l.Name, l.Chapter)).ToList());
+        // A level nobody cleared has no share, no median and no bar: NaN, a dash in the numbers
+        List<double> Share(int stars) => funnel.Select(l => l.Cleared > 0 ? 100.0 * l.Stars[stars - 1] / l.Cleared : double.NaN).ToList();
+        string[] starColours = ["c6", "c2", "c3", "c1"];
+        List<ChartSeries> stars = Enumerable.Range(1, Endpoints.MaxStars).Reverse()
+            .Select(k => new ChartSeries(k == 1 ? "1 star" : $"{k} stars", starColours[k - 1], Share(k))).ToList();
+        return Html.M($"""
+            <h2>Players per level, all time</h2>
+            {BarChart("Players per level, all time", Axis(),
+                [new("Cleared", "c1", funnel.Select(l => (double)l.Cleared).ToList()), new("Not cleared yet", "c2", funnel.Select(l => (double)l.Unfinished).ToList())], integer: true)}
+            <p class="note">Each level once, its versions together, in the order of the list below: where the bars drop is where players stop. Hidden players are not counted. "Not cleared yet" is a player who tried the level and never cleared it.</p>
+            <h2>Stars per level, % of the players who cleared it</h2>
+            {BarChart("Stars per level", Axis(), stars, integer: false)}
+            <p class="note">Each player's best clear of the level (their highest score on any version), by its stars: a tall four-star base is a generous level, a tall one-star top a stingy one. A level nobody cleared has no bar. With few players a bar is a few players: the funnel above says how many.</p>
+            <h2>Shots per level, the median of the best clears against the budget</h2>
+            {BarChart("Shots per level", Axis(), [
+                new("Median shots", "c1", funnel.Select(l => l.MedianShots ?? double.NaN).ToList()),
+                new("Left of the budget", "c6", funnel.Select(l => l.MedianShots is double m ? Math.Max(0, l.Budget - m) : double.NaN).ToList())], integer: false)}
+            <p class="note">The whole bar is the level's shot budget (the newest table's), the dark part the median shots of the players' best clears: a bar nearly all dark is a level cleared at the last shots.</p>
+            <h2>Time per level, the median of the best clears</h2>
+            {BarChart("Time per level, seconds", Axis(), [new("Median seconds", "c5", funnel.Select(l => l.MedianSeconds ?? double.NaN).ToList())], integer: false)}
+            """);
     }
 
     public static string Board(AdminData.BoardView b, TimeZoneInfo zone)
@@ -96,9 +121,25 @@ public static partial class AdminPages
             """), refresh: false);
     }
 
-    public static string Player(AdminData.PlayerView view, TimeZoneInfo zone)
+    /// <param name="progress">Their progress (#9, chart 12), drawn under the facts when they have sent anything.</param>
+    public static string Player(AdminData.PlayerView view, TimeZoneInfo zone, AdminData.PlayerProgress? progress = null)
     {
         AdminData.PlayerRow p = view.Player;
+        Markup charts = progress is not { } pr ? default : Html.M($"""
+            <h2>Progress</h2>
+            <p class="note">One value per UTC day from their first submission's day; a level counts once, whichever of its versions they cleared.</p>
+            <div class="cols">
+            <section><h2>Levels cleared, in all</h2>{LineChart("Levels cleared in all", pr.Days, [new("Levels", "c1", pr.LevelsCleared.Select(v => (double)v).ToList())])}</section>
+            <section><h2>Clears and unfinished attempts, per day</h2>{BarChart("Clears and unfinished attempts per day", pr.Days,
+                [new("Clears", "c1", pr.Clears.Select(v => (double)v).ToList()), new("Unfinished", "c2", pr.Unfinished.Select(v => (double)v).ToList())], integer: true)}</section>
+            </div>
+            {(pr.Best.Count == 0 ? default : Html.M($"""
+                <h2>Best clear per level, % of its ceiling</h2>
+                {BarChart("Best clear per level, per cent of the ceiling", LevelAxis(pr.Best.Select(b => (b.Name, b.Chapter)).ToList()),
+                    [new("Best clear", "c1", pr.Best.Select(b => b.Share).ToList())], integer: false)}
+                <p class="note">Each level they cleared on a board a ceiling table names, in the boards list's order: their best clear's score as a share of that board's ceiling, the best of the level's versions.</p>
+                """))}
+            """);
         Markup boards = Html.Join(view.Boards.Select(b => Html.M($"""
             <tr><td><a href="{BoardLink(b.Board)}"><code>{b.Board.File}#{b.Board.Hash}</code></a></td><td class="n">{b.Best.ToString("N0", CultureInfo.InvariantCulture)}</td><td class="n">{Stars(b.BestStars)}</td>
             <td>{Rank(b.Month, p.Hidden)}</td><td>{Rank(b.AllTime, p.Hidden)}</td></tr>
@@ -116,6 +157,7 @@ public static partial class AdminPages
             <tr><th>Addresses</th><td>{p.Addresses}, lettered below in the order they first appear</td></tr>
             <tr><th>Shares an address with</th><td>{Shares(p.SharesWith)}</td></tr>
             </table></div>
+            {charts}
             <h2>Boards</h2>
             <div class="panel"><table><tr><th>Board</th><th class="n">Best</th><th class="n">Stars</th><th>This month</th><th>All time</th></tr>{boards}</table></div>
             <h2>Submissions ({view.Submissions.Count}), newest first</h2>

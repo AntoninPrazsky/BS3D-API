@@ -135,7 +135,9 @@ public static class AdminWebApp
             return Page(AdminPages.Players(data.ReadPlayers(order), order, options.TimeZone));
         });
         app.MapGet("/player", (AdminData data, string? id) =>
-            Guid.TryParse(id, out Guid player) && data.ReadPlayer(player) is { } view ? Page(AdminPages.Player(view, options.TimeZone)) : Results.NotFound());
+            Guid.TryParse(id, out Guid player) && data.ReadPlayer(player) is { } view
+                ? Page(AdminPages.Player(view, options.TimeZone, data.ReadProgress(player, data.LoadCeilings())))
+                : Results.NotFound());
         app.MapGet("/notes", (AdminData data) =>
         {
             (IReadOnlyList<AdminData.NoteRow> notes, int total) = data.ReadNotes();
