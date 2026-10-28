@@ -50,6 +50,11 @@ public sealed class NicknameTests
     [InlineData("Píča")]
     [InlineData("kunda")]
     [InlineData("Sex Machine")]
+    [InlineData("Kulo Mrd")]
+    [InlineData("Ne Gr")]
+    [InlineData("Mr D")]
+    [InlineData("f u c k")]
+    [InlineData("Kurwa")]
     public void A_name_holding_a_denied_word_is_refused(string raw) => Assert.Null(Nicknames.Normalize(raw, Denied));
 
     /// <summary>And not the ordinary names that hold a short one inside them, which are only refused as a whole part.</summary>
@@ -68,4 +73,21 @@ public sealed class NicknameTests
     [InlineData("Titan")]
     [InlineData("Cucumber")]
     public void An_ordinary_name_that_holds_a_short_word_is_kept(string raw) => Assert.Equal(raw, Nicknames.Normalize(raw, Denied));
+
+    /// <summary>
+    /// Nor two ordinary words whose join holds a denied word (BS3D#1036): the words are looked in one at a time, and only runs
+    /// of one- and two-letter words are joined, so the gap between two real words is never read across.
+    /// </summary>
+    [Theory]
+    [InlineData("Jane Grey")]
+    [InlineData("Anne Green")]
+    [InlineData("Mr Darcy")]
+    [InlineData("Mr_Dobbs")]
+    [InlineData("Hans Lutz")]
+    [InlineData("Chris Hitchens")]
+    [InlineData("Wash It")]
+    [InlineData("Pen Isaac")]
+    [InlineData("Ben Iggy")]
+    [InlineData("Java Gina")]
+    public void Two_ordinary_words_are_not_read_across_their_gap(string raw) => Assert.Equal(raw, Nicknames.Normalize(raw, Denied));
 }
