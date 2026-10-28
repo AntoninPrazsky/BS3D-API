@@ -31,6 +31,7 @@ public sealed class AdminSeparationTests
             "POST /v1/scores",
             "GET /v1/boards/{file}",
             "GET /v1/boards",
+            "GET /v1/ranking",
             "PUT /v1/players/{id:guid}",
             "DELETE /v1/players/{id:guid}",
             "POST /v1/notes",

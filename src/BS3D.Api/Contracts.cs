@@ -65,6 +65,19 @@ public sealed record BoardSummary(string File, string Hash, int Rules, int Total
 public sealed record BoardTop(string Name, int Score, int Stars);
 
 /// <summary>
+/// The answer of <c>GET /v1/ranking</c> (#11, BS3D#827): one page of the players ranked across the campaign, per level
+/// their best clear in the period added up, how many are ranked, and the asking player's own row when asked for. Additive
+/// to contract v1; nothing above it changed.
+/// </summary>
+public sealed record RankingPage(string Period, string? Month, int Rules, int Total, IReadOnlyList<RankingEntry> Entries, RankingMe? Me);
+
+/// <summary>One row of the ranking: the levels cleared, their stars and their scores added up, and when that total was reached.</summary>
+public sealed record RankingEntry(int Rank, string Name, int Levels, int Stars, long Score, DateTimeOffset At);
+
+/// <summary>The asking player's place in <see cref="RankingPage"/>, on the page or off it. Null when they are not ranked.</summary>
+public sealed record RankingMe(int Rank, int Levels, int Stars, long Score);
+
+/// <summary>
 /// The body of <c>POST /v1/notes</c> (#10, BS3D#813): a line a player typed about what they were looking at, with the
 /// game's context and, unless the player unticked it, a JPEG of that frame. Additive to contract v1. Anyone may send one:
 /// <see cref="PlayerId"/> with the bearer token links it to an existing player, and <see cref="Name"/> without a link is
