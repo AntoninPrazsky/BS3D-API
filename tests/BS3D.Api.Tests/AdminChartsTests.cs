@@ -213,12 +213,15 @@ public sealed class AdminChartsTests
         Assert.Equal(["v1.0.0"], new AdminData(two.Options).ReadCharts("14d").Versions.Select(v => v.Version).ToList());
     }
 
-    /// <summary>A backup on the box, <paramref name="bytes"/> long, written at <paramref name="written"/>.</summary>
-    private static void Backup(AdminPage page, DateTimeOffset written, int bytes)
+    /// <summary>
+    /// A backup on the box, <paramref name="bytes"/> long, taken at <paramref name="taken"/> and last written then, or at
+    /// <paramref name="written"/>, the last night that found the database unchanged (#18).
+    /// </summary>
+    private static void Backup(AdminPage page, DateTimeOffset taken, int bytes, DateTimeOffset? written = null)
     {
-        string path = Path.Combine(Backups(page), $"scores-{written:yyyyMMdd-HHmmss}.db");
+        string path = Path.Combine(Backups(page), $"scores-{taken:yyyyMMdd-HHmmss}.db");
         File.WriteAllBytes(path, new byte[bytes]);
-        File.SetLastWriteTimeUtc(path, written.UtcDateTime);
+        File.SetLastWriteTimeUtc(path, (written ?? taken).UtcDateTime);
     }
 
     private static string Backups(AdminPage page) =>
@@ -280,6 +283,36 @@ public sealed class AdminChartsTests
         // A copy not set up is not drawn
         File.WriteAllText(Path.Combine(Backups(page), "last-offsite"), "attempt=2026-09-15T01:30:00Z\nresult=none\ndetail=no repository\nok=\ncopy=\nevery=2\n");
         Assert.Equal(["On the box", "Off the box"], new AdminData(page.Options).ReadCharts("14d").Copies.Select(c => c.Name).ToList());
+    }
+
+    [Fact]
+    public async Task An_unchanged_database_keeps_its_backup_current_on_the_box_its_size_drawn_and_its_age_not_late()
+    {
+        await using AdminPage page = await AdminPage.StartAsync((store, c, now) => AdminPage.AddPlayer(store, c, On(9, 1), "Ann"));
+        // Taken on 09-10 and unchanged until 09-13, so no new file until the database changed on 09-14; 09-15's run failed
+        Backup(page, At(10, 1, 30), 2000, written: At(13, 1, 30));
+        Backup(page, At(14, 1, 30), 3000);
+        File.WriteAllText(Path.Combine(Backups(page), "last-onbox"), "attempt=2026-09-15T01:30:00Z\nresult=failed\ndetail=admin backup failed\nok=2026-09-14T01:30:00Z\ncopy=x\nevery=1\n");
+        File.WriteAllLines(Path.Combine(Backups(page), "last-onbox.log"), [
+            "attempt=2026-09-10T01:30:00Z result=ok ok=2026-09-10T01:30:00Z every=1",
+            "attempt=2026-09-11T01:30:00Z result=ok ok=2026-09-11T01:30:00Z every=1",
+            "attempt=2026-09-12T01:30:00Z result=ok ok=2026-09-12T01:30:00Z every=1",
+            "attempt=2026-09-13T01:30:00Z result=ok ok=2026-09-13T01:30:00Z every=1",
+            "attempt=2026-09-14T01:30:00Z result=ok ok=2026-09-14T01:30:00Z every=1",
+            "attempt=2026-09-15T01:30:00Z result=failed ok=2026-09-14T01:30:00Z every=1"]);
+
+        AdminData.Charts ch = new AdminData(page.Options).ReadCharts("14d");
+        const int sep9 = 7, sep10 = 8, sep15 = 13;
+
+        // The unchanged copy on each day it held the database, the next one from the day it was taken
+        Assert.Equal([2000.0, 2000, 2000, 2000, 3000], ch.BackupBytes[sep10..sep15]);
+        Assert.True(double.IsNaN(ch.BackupBytes[sep9]) && double.IsNaN(ch.BackupBytes[sep15]));
+
+        // A good copy every night from the log, none late; today 34.5 h at noon, and the failed night marked
+        AdminData.CopyAges box = ch.Copies[0];
+        Assert.Equal("On the box", box.Name);
+        Assert.Equal([22.5, 24, 24, 24, 24, 34.5], box.Age[sep10..].Select(a => Math.Round(a * 24, 6)).ToArray());
+        Assert.Equal(Marks(null, null, null, null, null, "failed"), box.Marks[sep10..]);
     }
 
     [Fact]
