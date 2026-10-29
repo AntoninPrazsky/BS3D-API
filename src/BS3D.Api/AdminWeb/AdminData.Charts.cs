@@ -22,7 +22,10 @@ public sealed partial class AdminData
     /// then the <see cref="ReleaseSeries"/> releases sent most over the range, in the order each first arrived. A series
     /// with nothing in the range is left out.
     /// </param>
-    /// <param name="BackupBytes">The size of each day's last backup on the box, NaN on a day with none kept.</param>
+    /// <param name="BackupBytes">
+    /// The size of each day's last backup on the box, NaN on a day with none kept. A backup counts on every day from the
+    /// one it was taken to the one a night found the database unchanged last (#18).
+    /// </param>
     /// <param name="Copies">The newest good copy's age, on the box, off it and off the site, those set up.</param>
     /// <param name="HourClears">The range's clears by the UTC hour they arrived in, <c>[0]</c> from 00:00 to 01:00 (chart 4).</param>
     /// <param name="HourUnfinished">The range's unfinished attempts by the UTC hour they arrived in.</param>
@@ -154,14 +157,23 @@ public sealed partial class AdminData
                 return (v, share);
             }).ToList();
 
-        // The backups on the box, by the time each was written, as the overview's newest backup is
-        List<(DateTimeOffset Written, long Bytes)> backups = Backups();
+        // The backups on the box, each on every day from the one it was taken to the one it was last written: a night that
+        // finds the database unchanged makes no new copy and sets the last one's time (#18), so an unchanged stretch has
+        // the copy that held it. A later copy takes its days
+        List<(DateTimeOffset Taken, DateTimeOffset Written, long Bytes)> backups = Backups();
         double[] backupBytes = Enumerable.Repeat(double.NaN, n).ToArray();
-        foreach ((DateTimeOffset written, long bytes) in backups.OrderBy(b => b.Written))
-            if (index.TryGetValue(DayText(written.UtcDateTime), out int i)) backupBytes[i] = bytes;
+        foreach ((DateTimeOffset taken, DateTimeOffset written, long bytes) in backups.OrderBy(b => b.Taken).ThenBy(b => b.Written))
+            for (DateTime day = taken.UtcDateTime.Date; day <= written.UtcDateTime.Date; day = day.AddDays(1))
+                if (index.TryGetValue(DayText(day), out int i)) backupBytes[i] = bytes;
 
+        // On the box: when each backup was taken and last written, and the good copies of its log (#18), which has one for
+        // every night that found the database unchanged
         DateTimeOffset now = options.Clock.GetUtcNow();
-        List<CopyAges> copies = [Ages("On the box", days, now, backups.Select(b => b.Written).ToList(), [], every: 1)];
+        List<OffBox> boxLog = CopyLog("last-onbox.log");
+        List<DateTimeOffset> boxGood = backups.SelectMany(b => new[] { b.Taken, b.Written })
+            .Concat(boxLog.Select(l => l.Ok).Append(CopyRecord("last-onbox")?.Ok).OfType<DateTimeOffset>()).ToList();
+        List<DateTimeOffset> boxFailed = boxLog.Where(l => l.Result == "failed").Select(l => l.Attempt).OfType<DateTimeOffset>().ToList();
+        List<CopyAges> copies = [Ages("On the box", days, now, boxGood, boxFailed, every: 1)];
         foreach ((string name, string record) in new[] { ("Off the box", "last-offbox"), ("Off the site", "last-offsite") })
         {
             // A copy not set up has no age to draw, nor has one with no record yet
@@ -224,13 +236,23 @@ public sealed partial class AdminData
         return new CopyAges(name, age, marks);
     }
 
-    /// <summary>The backups on the box, <c>backups/scores-*.db</c>, with the time each was written; none when unreadable.</summary>
-    private List<(DateTimeOffset Written, long Bytes)> Backups()
+    /// <summary>
+    /// The backups on the box, <c>backups/scores-*.db</c>: when each was taken, as its name says (UTC), when it was last
+    /// written, which a night that finds the database unchanged sets (#18), and its size; none when unreadable. A name
+    /// that does not read, or says a time after the last write, is taken when it was written.
+    /// </summary>
+    private List<(DateTimeOffset Taken, DateTimeOffset Written, long Bytes)> Backups()
     {
         try
         {
-            return new DirectoryInfo(BackupFolder).EnumerateFiles("scores-*.db")
-                .Select(f => (new DateTimeOffset(f.LastWriteTimeUtc), f.Length)).ToList();
+            return new DirectoryInfo(BackupFolder).EnumerateFiles("scores-*.db").Select(f =>
+            {
+                DateTimeOffset written = new(f.LastWriteTimeUtc);
+                DateTimeOffset taken = DateTime.TryParseExact(f.Name, "'scores-'yyyyMMdd-HHmmss'.db'", CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out DateTime named) && named <= written.UtcDateTime
+                    ? new DateTimeOffset(named, TimeSpan.Zero) : written;
+                return (taken, written, f.Length);
+            }).ToList();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {

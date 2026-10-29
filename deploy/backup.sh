@@ -11,6 +11,13 @@
 # (2026-10-08): the card only, never an rsync destination over SSH, and never off the site. Restore is copying that
 # folder back to /var/lib/bs3d-api/note-pictures, owned by bs3d-api.
 #
+# A night that finds the database unchanged makes no new copy (#18, the owner's decision of 2026-10-29). A copy of an
+# unchanged database through SQLite's backup API is the copy before it byte for byte, so the new one is deleted and the
+# one before stays the current one, with its time set to now: the days kept count from the night it was last the
+# database's, so a database unchanged for longer than that keeps its copy. The card's copy of it gets its time set
+# too, and nothing written; off the site no snapshot is made, but the repository is asked for that copy's, so a host
+# gone or a password changed still fails the run. Any write is a change, a refused request's line in the log included.
+#
 # backup.env is root's, read by systemd before it drops to bs3d-api; deploy/backup-card.sh writes it for a card, and
 # deploy/backup-offsite.sh for the copy off the site:
 #   BACKUP_OFFBOX_TARGET       where the copy goes: a folder on a drive the Pi mounts (/mnt/bs3d-backup/bs3d-api/), or
@@ -28,12 +35,13 @@
 # bs3d-api-offsite.password (the repository's), and for SFTP bs3d-api-offsite.key and bs3d-api-offsite.known_hosts.
 # The repository keeps a copy a day for 30 days and one a month for 12 months.
 #
-# Every run records each copy, in backups/last-offbox (the drive) and backups/last-offsite: the attempt, its result
-# (ok, failed or none) and why, the last good copy and its time, which a failed run keeps, and the days between copies,
-# and adds the run as a line to the record's log (last-offbox.log, last-offsite.log), the last 1000 runs. The admin
-# page shows the records and charts the copies' ages from the logs, because the journal is gone after a reboot and a unit that never ran still reads as a
-# success. Each copy is tried whether the other worked or not, after the copy on the box is made, and either failing
-# fails the unit. BACKUP_DIR and BS3D_API exist for tests/deploy/backup.test.sh.
+# Every run records each copy, in backups/last-onbox (#18), backups/last-offbox (the drive) and backups/last-offsite:
+# the attempt, its result (ok, failed or none) and why, the last good copy and its time, which a failed run keeps, and
+# the days between copies, and adds the run as a line to the record's log (last-onbox.log, last-offbox.log,
+# last-offsite.log), the last 1000 runs. The admin page shows the records and charts the copies' ages from the logs,
+# because the journal is gone after a reboot and a unit that never ran still reads as a success. Each copy is tried
+# whether the other worked or not, after the copy on the box is made, and either failing fails the unit. BACKUP_DIR and
+# BS3D_API exist for tests/deploy/backup.test.sh.
 set -euo pipefail
 
 BACKUPS=${BACKUP_DIR:-/var/lib/bs3d-api/backups}
@@ -45,10 +53,6 @@ name="scores-$(date -u +%Y%m%d-%H%M%S).db"
 target="$BACKUPS/$name"
 
 mkdir -p "$BACKUPS"
-"$API" admin backup "$target"
-"$API" admin count
-
-find "$BACKUPS" -name 'scores-*.db' -type f -mtime +"$KEEP_DAYS" -print -delete
 
 # previous <record> <key>: the value the record holds
 previous() {
@@ -70,6 +74,32 @@ record() {
       printf 'attempt=%s result=%s ok=%s every=%s\n' "$attempt" "$3" "$ok" "$2"; } > "$1.log.tmp"
     mv -f "$1.log.tmp" "$1.log"
 }
+
+# The copy on the box, every night; a new one only when the database changed since the copy before it, the newest by
+# name (#18)
+code=0
+"$API" admin backup "$target" || code=$?
+if (( code != 0 )); then
+    record "$BACKUPS/last-onbox" 1 failed "BS3D.Api admin backup failed with exit code $code"
+    echo "the copy on the box FAILED: BS3D.Api admin backup failed with exit code $code" >&2
+    exit 1
+fi
+"$API" admin count
+before=$(find "$BACKUPS" -maxdepth 1 -name 'scores-*.db' -type f ! -name "$name" -printf '%f\n' | sort | tail -1)
+unchanged=false
+if [[ -n $before ]] && cmp -s "$target" "$BACKUPS/$before"; then
+    rm -f "$target"
+    name=$before
+    target="$BACKUPS/$name"
+    touch "$target"
+    unchanged=true
+    record "$BACKUPS/last-onbox" 1 ok "the database is unchanged since $name: no new copy" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name"
+    echo "the database is unchanged since $name: no new copy, that one is current"
+else
+    record "$BACKUPS/last-onbox" 1 ok "a new copy" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name"
+fi
+
+find "$BACKUPS" -name 'scores-*.db' -type f -mtime +"$KEEP_DAYS" -print -delete
 
 # The copy to a drive the Pi mounts, or over rsync: every night
 offbox() {
@@ -97,7 +127,16 @@ offbox() {
         [[ -d $real_offbox ]] || fail "$offbox is not a folder on the drive at $mount"
     fi
 
-    rsync --timeout=60 "$target" "$offbox" || fail "rsync to $offbox failed with exit code $?"
+    local detail="copied to $offbox"
+    if $unchanged && $local_folder && cmp -s "$target" "$real_offbox/$name"; then
+        # On the drive already, from the night it was taken: its time set as the box's, for the days kept, and nothing
+        # written. A drive without it, or with it different, gets it below; a destination over SSH gets it again, under
+        # the same name
+        touch "$real_offbox/$name" || fail "the database is unchanged, but its copy on the drive at $mount could not be touched"
+        detail="the database is unchanged since $name, which is on $offbox already"
+    else
+        rsync --timeout=60 "$target" "$offbox" || fail "rsync to $offbox failed with exit code $?"
+    fi
 
     if $local_folder; then
         # The notes' pictures, on the card only (#12): before the sync, which then covers them too
@@ -110,8 +149,8 @@ offbox() {
     else
         echo "the note pictures go to a drive the Pi mounts only: none were copied to $offbox"
     fi
-    record "$status" 1 ok "copied to $offbox" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name"
-    echo "copied off the box to $offbox"
+    record "$status" 1 ok "$detail" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name"
+    echo "off the box: $detail"
 }
 
 # The encrypted copy off the site, by restic: every OFFSITE_EVERY_DAYS days
@@ -158,6 +197,23 @@ offsite() {
     trap 'rm -f "$out" "$errors"' EXIT
     # restic's last line on stderr, which says why
     why() { grep -v '^[[:space:]]*$' "$errors" | tail -1 | tr -d '\r' | cut -c 1-300; }
+
+    # The database unchanged since the last good copy off the site (#18): no snapshot, but the repository is asked for
+    # that copy's, which the policy below never forgets, being the newest, so a repository that cannot be read or has
+    # lost it still fails the run
+    if $unchanged && [[ $(previous "$status" copy) == "$name" ]]; then
+        code=0
+        timeout 10m restic "${args[@]}" snapshots --host bs3d-api --path "$target" --json > "$out" 2> "$errors" || code=$?
+        cat "$errors" >&2
+        (( code == 0 )) || fail "the database is unchanged since the copy off the site, but restic snapshots failed with exit code $code: $(why)"
+        # None found is no line, which under pipefail would end the run here unrecorded
+        snapshot=$(grep -o '"id":"[0-9a-f]*"' "$out" | tail -1 | cut -c 7-14 || true)
+        [[ -n $snapshot ]] || fail "the database is unchanged since $name, but the repository off the site holds no snapshot of it"
+        record "$status" "$every" ok "the database is unchanged since snapshot $snapshot, which the repository off the site holds" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$name"
+        echo "off the site: the database is unchanged since snapshot $snapshot, which the repository holds: no new one"
+        return 0
+    fi
 
     # One host and one tag for every copy, so the policy below sees one series although each copy's file has its own name
     code=0

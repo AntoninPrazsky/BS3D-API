@@ -23,12 +23,15 @@ work=$(mktemp -d)
 trap 'umount "$work/card" 2> /dev/null; rm -rf "$work"' EXIT
 mkdir -p "$work/bin" "$work/card"
 
+# backup writes CONTENT, or a copy of its own each time, a database that changed; BACKUP_FAIL makes it fail.
 # mirror-pictures (#12) records where it was asked to copy, and whether the database's copy was there before it, and
 # plants a picture, so a copy off the site that took the card's folder would be seen; MIRROR_FAIL makes it fail
 cat > "$work/bin/BS3D.Api" << 'EOF'
 #!/bin/sh
 case "$2" in
-    backup) echo "a copy of the database" > "$3" ;;
+    backup)
+        [ -z "${BACKUP_FAIL:-}" ] || exit 4
+        echo "${CONTENT:-a copy taken at $(date +%s%N)}" > "$3" ;;
     count) echo "players 2 submissions 11" ;;
     mirror-pictures)
         newest=$(find "$BACKUP_DIR" -maxdepth 1 -name 'scores-*.db' -printf '%f\n' | sort | tail -1)
@@ -168,6 +171,53 @@ run "${card[@]}" BACKUP_OFFBOX_KEEP_DAYS=100
 if [[ ! -e "$work/card/bs3d-api/scores-20190201-000000.db" ]]; then pass "BACKUP_OFFBOX_KEEP_DAYS sets the card's days"
 else fail "BACKUP_OFFBOX_KEEP_DAYS=100 kept a copy 300 days old"; fi
 
+# 6a. The database unchanged (#18): no new copy on the box or on the card, the one before current, with its time set
+box() { sed -n "s/^$1=//p" "$work/backups/last-onbox"; }
+fresh() { [[ -n $(find "$1" -mmin -1 2> /dev/null) ]]; }
+sleep 1
+run "${card[@]}" CONTENT=one
+first=$(field copy)
+if [[ $status -eq 0 && $(box copy) == "$first" && $(box detail) == "a new copy" ]]; then pass "a database that changed: a new copy, and last-onbox names it"
+else fail "a database that changed: exit $status, last-onbox copy '$(box copy)' (the card's '$first'), detail '$(box detail)'"; fi
+touch -d '2 hours ago' "$work/backups/$first" "$work/card/bs3d-api/$first"
+on_box=$(copies "$work/backups")
+on_card=$(copies "$work/card/bs3d-api")
+: > "$work/mirrored"
+sleep 1
+run "${card[@]}" CONTENT=one
+if [[ $status -eq 0 && $(copies "$work/backups") -eq $on_box && $(box copy) == "$first" && $(box result) == ok \
+    && $(box detail) == *"unchanged since $first"* && $(cat "$work/out") == *"unchanged since $first"* ]] && fresh "$work/backups/$first"; then
+    pass "the database unchanged: no new copy on the box, the one before current, its time set, and last-onbox says so"
+else fail "the database unchanged on the box: exit $status, $(copies "$work/backups") copies (were $on_box), last-onbox '$(box copy)', '$(box detail)': $(cat "$work/out")"; fi
+if [[ $(copies "$work/card/bs3d-api") -eq $on_card && $(field result) == ok && $(field copy) == "$first" && $(field detail) == *"unchanged since $first"* ]] \
+    && fresh "$work/card/bs3d-api/$first" && fresh "$work/backups/last-offbox"; then
+    pass "the database unchanged: no new copy on the card, the one there with its time set, and last-offbox ok"
+else fail "the database unchanged on the card: $(copies "$work/card/bs3d-api") copies (were $on_card), result '$(field result)', copy '$(field copy)', detail '$(field detail)'"; fi
+if [[ $(cat "$work/mirrored") == "$work/card/bs3d-api/note-pictures" ]]; then pass "the database unchanged: the note pictures are mirrored all the same"
+else fail "the database unchanged: the pictures' copy went to '$(cat "$work/mirrored")'"; fi
+rm "$work/card/bs3d-api/$first"
+sleep 1
+run "${card[@]}" CONTENT=one
+if [[ $status -eq 0 && $(copies "$work/backups") -eq $on_box ]] && cmp -s "$work/backups/$first" "$work/card/bs3d-api/$first"; then
+    pass "the database unchanged, and the card without its copy: the card gets it"
+else fail "the card without the unchanged copy: exit $status, $(ls "$work/card/bs3d-api")"; fi
+touch -d '40 days ago' "$work/backups/$first"
+sleep 1
+run "${card[@]}" CONTENT=one
+if [[ $status -eq 0 && -f "$work/backups/$first" && $(copies "$work/backups") -eq $on_box ]] && fresh "$work/backups/$first"; then
+    pass "a database unchanged for longer than the days kept keeps its copy"
+else fail "an unchanged copy 40 days old: exit $status, $(ls "$work/backups")"; fi
+run "${card[@]}" CONTENT=one BACKUP_FAIL=1
+if [[ $status -ne 0 && $(box result) == failed && $(box detail) == *"admin backup failed"* && $(box copy) == "$first" \
+    && $(tail -1 "$work/backups/last-onbox.log") == *" result=failed "* ]]; then
+    pass "a copy on the box that fails: the run fails, and last-onbox says so and keeps the last good copy"
+else fail "a failing copy on the box: exit $status, last-onbox '$(box result)', '$(box detail)', copy '$(box copy)'"; fi
+sleep 1
+run "${card[@]}"
+if [[ $status -eq 0 && $(copies "$work/backups") -eq $((on_box + 1)) && $(box copy) != "$first" && $(field copy) == "$(box copy)" ]]; then
+    pass "the database changed again: a new copy on the box and on the card"
+else fail "the database changed again: exit $status, $(copies "$work/backups") copies (were $on_box), last-onbox '$(box copy)', the card's '$(field copy)'"; fi
+
 # The copy off the site: a restic repository over SFTP. The stand-in for ssh records its arguments and runs the real
 # sftp-server, which serves this machine's files, so the repository's absolute path is a scratch folder here
 cat > "$work/bin/ssh" << EOF
@@ -283,6 +333,51 @@ on_the_day=$(rs snapshots --json 2> /dev/null | grep -o '"time":"2025-01-01' | w
 if [[ $status -eq 0 && $on_the_day -eq 1 ]] && in_repo "$(newest)" && in_repo scores-20250101-153000.db; then
     pass "restic forget keeps a day's last copy, across files of different names"
 else fail "restic forget: $on_the_day snapshots left on 2025-01-01: $(cat "$work/out")"; fi
+
+# 13. The database unchanged since the copy off the site (#18): when one is due, no snapshot, but the repository is asked
+# for the one that holds it, so a repository that cannot be read or has lost it fails the run
+snapshots() { rs snapshots --json 2> /dev/null | grep -o '"id":"' | wc -l; }
+ago '3 days ago'
+sleep 1
+run "${card[@]}" "${site_vars[@]}" CONTENT=three
+held=$(newest)
+if [[ $status -eq 0 && $(site copy) == "$held" ]] && in_repo "$held"; then pass "a database that changed since the copy off the site: a snapshot of it"
+else fail "the database changed: exit $status, site '$(site result)', copy '$(site copy)': $(cat "$work/out")"; fi
+count=$(snapshots)
+ago '3 days ago'
+rm -f "$work/ssh-args"
+sleep 1
+run "${card[@]}" "${site_vars[@]}" CONTENT=three
+if [[ $status -eq 0 && $(snapshots) -eq $count && $(site result) == ok && $(site copy) == "$held" && $(site detail) == *"unchanged since snapshot "?* \
+    && -e "$work/ssh-args" ]] && fresh "$work/backups/last-offsite" \
+    && (( $(date +%s) - $(date -d "$(site ok)" +%s) < 60 )); then
+    pass "the database unchanged since the copy off the site: no snapshot, the repository asked, and last-offsite ok"
+else fail "unchanged off the site: exit $status, $(snapshots) snapshots (were $count), result '$(site result)', ok '$(site ok)', detail '$(site detail)': $(cat "$work/out")"; fi
+ago '3 days ago'
+sleep 1
+run "${card[@]}" BACKUP_OFFSITE_REPOSITORY="$url" CREDENTIALS_DIRECTORY="$work/wrong" CONTENT=three
+if [[ $status -ne 0 && $(site result) == failed && $(site detail) == *"restic snapshots failed"* && $(site copy) == "$held" ]]; then
+    pass "the database unchanged, and a repository that cannot be read: the run fails"
+else fail "unchanged, with the wrong password: exit $status, result '$(site result)', detail '$(site detail)'"; fi
+for id in $(rs snapshots --path "$work/backups/$held" --json 2> /dev/null | grep -o '"id":"[0-9a-f]*"' | cut -c 7-70); do
+    rs forget "$id" > /dev/null 2>&1
+done
+sleep 1
+run "${card[@]}" "${site_vars[@]}" CONTENT=three
+if [[ $status -ne 0 && $(site result) == failed && $(site detail) == *"holds no snapshot of it"* ]]; then
+    pass "the database unchanged, and a repository that lost its copy: the run fails"
+else fail "unchanged, with the copy gone from the repository: exit $status, result '$(site result)', detail '$(site detail)'"; fi
+# Changed while no copy off the site was due, and unchanged the night one is: that night's copy goes off the site
+ago '1 hour ago'
+sleep 1
+run "${card[@]}" "${site_vars[@]}" CONTENT=four
+changed=$(newest)
+ago '3 days ago'
+sleep 1
+run "${card[@]}" "${site_vars[@]}" CONTENT=four
+if [[ $status -eq 0 && $changed != "$held" && $(newest) == "$changed" && $(site result) == ok && $(site copy) == "$changed" ]] && in_repo "$changed"; then
+    pass "the database changed since the copy off the site, though not since the box's: a snapshot of it"
+else fail "changed since the copy off the site only: exit $status, newest '$(newest)' (was '$changed'), result '$(site result)', copy '$(site copy)'"; fi
 
 if (( failures > 0 )); then echo "$failures failure(s)"; exit 1; fi
 echo "all passed"

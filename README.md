@@ -94,6 +94,13 @@ sudo /opt/bs3d-api/current/deploy/backup-card.sh /dev/mmcblk0
 
 From then on every nightly copy also goes to `/mnt/bs3d-backup/bs3d-api/`. Copies there are kept a year; `BACKUP_OFFBOX_KEEP_DAYS` in `backup.env` changes that. With the card pulled, the run fails, rather than writing into the empty mount point on the NVMe and calling it a success.
 
+**A night that finds the database unchanged makes no new copy** (#18). A copy of an unchanged database is the copy before it byte for byte, so the new one is deleted and the one before stays current, on the Pi and on the card.
+
+- **Its file's time is set to now**, so the thirty days (and the card's year) count from the last night it was the database's: a database unchanged for longer keeps its copy. Its name still says when it was taken.
+- **Any write is a change**, a refused request's line in the log included.
+- **The copy off the site** makes no snapshot of an unchanged database either. It asks the repository for the snapshot that holds it instead, so a host gone or a password changed still fails the run within the two days.
+- **The record for the Pi's own copy** is `last-onbox`, with `last-onbox.log` beside it, kept like the other two below. The admin page's charts draw the age of the copy on the Pi from it.
+
 **The notes' pictures go to the card, and only there** (#12). They are files beside the database, not in it, so no copy of the database holds them. Each night, `admin mirror-pictures` brings `/mnt/bs3d-backup/bs3d-api/note-pictures/` up to date: one copy of each picture, not one a night.
 
 - **What it copies:** a picture the card lacks.
@@ -123,7 +130,7 @@ sudo /opt/bs3d-api/current/deploy/backup-offsite.sh 'sftp://<account>@<host>:<po
 
 A copy goes when the last good one is two days old, less half a day for the timer's jitter, so a failed one is tried again the next night; `BACKUP_OFFSITE_EVERY_DAYS` in `backup.env` changes the days. The repository keeps a copy a day for 30 days and one a month for 12 months (restic also keeps the oldest while there are fewer). Each result is recorded in `/var/lib/bs3d-api/backups/last-offsite` and its line added to `last-offsite.log`, and the admin page's overview shows it beside the card's. It warns when none is set up, when the last copy failed, or when the newest is older than its days and one more. Each copy is tried whether the other worked or not, and either failing fails the run. `--remove` stops the copies; the repository on the host stays.
 
-Run a backup by hand with `sudo systemctl start bs3d-api-backup`. Read what it did with `journalctl -u bs3d-api-backup -n 30`, `sudo cat /var/lib/bs3d-api/backups/last-offbox` and `sudo cat /var/lib/bs3d-api/backups/last-offsite`.
+Run a backup by hand with `sudo systemctl start bs3d-api-backup`. Read what it did with `journalctl -u bs3d-api-backup -n 30`, `sudo cat /var/lib/bs3d-api/backups/last-onbox`, `sudo cat /var/lib/bs3d-api/backups/last-offbox` and `sudo cat /var/lib/bs3d-api/backups/last-offsite`.
 
 To restore:
 
