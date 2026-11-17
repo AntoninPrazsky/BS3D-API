@@ -146,8 +146,9 @@ public static partial class Endpoints
     /// <summary>
     /// What makes a submission impossible, or null (issue #2). On a known board: over the ceiling, more shots than the
     /// budget grants, and for a clear, fewer shots than any clear takes, faster than a human fires that many, and stars
-    /// its score does not earn where a table states the board's star floors (#16). Anywhere: stars outside 0–4, and
-    /// numbers that are not numbers.
+    /// its score does not earn where a table states the board's star floors (#16). On a board with a time bonus (#19):
+    /// a clear faster than the table's <c>minSeconds</c> or over the ceiling at its claimed time, and an unfinished
+    /// attempt over the ceiling without the bonus. Anywhere: stars outside 0–4, and numbers that are not numbers.
     /// </summary>
     private static string? Implausible(SubmissionRequest s, BoardKey board, Ceilings ceilings, ScoresOptions o)
     {
@@ -161,11 +162,17 @@ public static partial class Endpoints
 
         if (s.Score > row.Ceiling) return Reasons.OverCeiling;
         if (s.ShotsUsed > row.Shots) return Reasons.BadShots;
-        if (s.Stars == 0) return null;
+
+        //An unfinished attempt is paid no time bonus, so on a board with one its ceiling is the lower (#19)
+        if (s.Stars == 0) return ceilings.TimeRefusal(board, s.Score, s.Stars, s.DurationSeconds);
 
         //The floors are a clear's: an unfinished attempt can end after one shot, or before any (#8)
         if (s.ShotsUsed < row.MinShots) return Reasons.BadShots;
         if (s.DurationSeconds < row.MinShots * o.MinSecondsPerShot) return Reasons.BadDuration;
+
+        //Rules v2 pays a clear for its time (#19, BS3D#1045): no faster than the table's minSeconds, and no more than the
+        //ceiling at the seconds it claims
+        if (ceilings.TimeRefusal(board, s.Score, s.Stars, s.DurationSeconds) is { } time) return time;
 
         //The game rates a clear by its score alone (StarRating.Rate), so a score earns exactly one number of stars (#16)
         if (!ceilings.StarsMatch(board, s.Score, s.Stars)) return Reasons.BadStars;
