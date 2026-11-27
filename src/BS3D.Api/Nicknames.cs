@@ -54,14 +54,15 @@ public static class Nicknames
     /// forbidden word"), matched in each word of the name <b>folded</b> (<see cref="Fold"/>, <see cref="HasDeniedWord"/>):
     /// diacritics off, lower case, and the digits that stand for letters read as those letters, and runs of one- and two-letter
     /// words joined, so "KuloMrd", "k_u_r_v_a" and "kurv4" are all caught and "Jane Grey" is not (BS3D#1036).
-    /// Czech and Slovak first, English and German after. A root that also sits inside ordinary names is not here but in
-    /// <see cref="DeniedParts"/>. The game's copy is BS3D's <c>Nickname.DeniedWords</c>; change both in step.
+    /// Czech and Slovak first, English and German after; "kigger" is a spoonerism of a slur (BS3D#1262). A root that also
+    /// sits inside ordinary names is not here but in <see cref="DeniedParts"/>. The game's copy is BS3D's
+    /// <c>Nickname.DeniedWords</c>; change both in step.
     /// </summary>
     public static readonly string[] DeniedWords =
     [
         "mrd", "kurv", "kurw", "kokot", "curak", "prdel", "hovn", "srac", "jebat", "jeban", "jebn", "zasran", "buzna", "buzerant",
         "negr", "kreten", "hajzl", "sukat", "picus", "picovin", "debil",
-        "fuck", "shit", "cunt", "nigg", "fagg", "bitch", "whore", "slut", "porn", "nazi", "hitler", "penis", "vagin",
+        "fuck", "shit", "cunt", "nigg", "kigger", "fagg", "bitch", "whore", "slut", "porn", "nazi", "hitler", "penis", "vagin",
         "asshole", "bastard", "retard", "wanker", "dildo", "pussy", "motherf", "cocksuck", "blowjob",
         "ficken", "fotze", "arschloch",
     ];
