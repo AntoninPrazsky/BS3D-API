@@ -55,6 +55,9 @@ public sealed class NicknameTests
     [InlineData("Mr D")]
     [InlineData("f u c k")]
     [InlineData("Kurwa")]
+    [InlineData("Will Kiggers")]                     //BS3D#1262: a spoonerism of a slur
+    [InlineData("K1gger")]
+    [InlineData("k_i_g_g_e_r")]
     public void A_name_holding_a_denied_word_is_refused(string raw) => Assert.Null(Nicknames.Normalize(raw, Denied));
 
     /// <summary>And not the ordinary names that hold a short one inside them, which are only refused as a whole part.</summary>
